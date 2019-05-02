@@ -151,7 +151,7 @@ struct Actor actor_table[32];
 struct Particle particles[PARTICLE_COUNT];
 struct Emitter emitter;
 struct TileMap tiles;
-struct EspicoState espico;
+struct EspicoState espico __attribute__ ((aligned));
 
 #pragma GCC optimize ("-O2")
 #pragma GCC push_options
@@ -322,8 +322,8 @@ void drawBuffer() {
 
 void redrawScreen(){
   int i;
+  if (espico.ondraw != 0 && !espico.drawdone) return;
   cadr_count++;
-  if (espico.ondraw == 0 || !espico.drawdone) return;
   for(int y = 0; y < 128; y++){
     i = 0;
     if(line_is_draw[y] == 1){
@@ -351,9 +351,9 @@ void redrawScreen(){
       else
         tft.setAddrWindow(DISPLAY_X_OFFSET + 128, y * 2 - 8, DISPLAY_X_OFFSET + 255, y * 2 + 2 - 8);
       // Each byte contains two pixels
-      for(int x = 32; x < 64; x++){
-          pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_LEFT(screen[SCREEN_ADDR(x,y)])];
-          pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_RIGHT(screen[SCREEN_ADDR(x,y)])];
+      for(int x = 0; x < 32; x++){
+          pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_LEFT(screen[SCREEN_ADDR(x+32,y)])];
+          pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_RIGHT(screen[SCREEN_ADDR(x+32,y)])];
       }
       tft.pushColors(pix_buffer, 128);
       if(y >= 8 && y <= 120)
@@ -376,7 +376,7 @@ void redrawScreen(){
       if(y >= 8 && y <= 120)
         tft.pushColors(pix_buffer, 256);
       line_is_draw[y] = 0;
-    } 
+    }
   }
 }
 
@@ -571,10 +571,18 @@ void testActorCollision(){
 }
 
 void clearScr(uint8_t color){
-  for(byte y = 0; y < 128; y ++){
-    for(byte x = 0; x < 128; x++)
+  /*
+  for(uint8_t y = 0; y < 128; y ++){
+    for(uint8_t x = 0; x < 128; x++)
       setPix(x, y, color);
   }
+  */
+  uint8_t twocolor = ((color << 4) | (color & 0x0f));
+  memset(screen, twocolor, SCREEN_SIZE);
+  memset(line_is_draw, 3, 128);
+//  for (int y = 0; y < 128; y++) 
+//    line_is_draw[y] |= 3;
+
 }
 
 void setImageSize(uint8_t size){
@@ -1029,8 +1037,8 @@ void drwLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
     }
   }
 
-inline void setPix(int16_t x, int16_t y, uint8_t c){
-  int16_t xi = x / 2;
+inline void setPix(uint16_t x, uint16_t y, uint8_t c){
+  uint8_t xi = x / 2;
   uint8_t b;
   if(x < 128 && y < 128){
     b = screen[SCREEN_ADDR(xi, y)];
@@ -1052,7 +1060,7 @@ inline void setPix2(int16_t xi, int16_t y, uint8_t c){
   }
 }
 
-byte getPix(int16_t x, int16_t y){
+byte getPix(byte x, byte y){
   byte b = 0;
   int16_t xi = x / 2;
   if(x >= 0 && x < 128 && y >= 0 && y < 128){
@@ -1247,11 +1255,11 @@ void charLineUp(byte n){
   }
 }
 
-void setCharX(int8_t x){
+inline void setCharX(int8_t x){
   espico.regx = x;
 }
 
-void setCharY(int8_t y){
+inline void setCharY(int8_t y){
   espico.regy = y;
 }
 
@@ -1299,7 +1307,7 @@ void printc(char c, byte fc, byte bc){
   }
 }
 
-void setColor(uint8_t c){
+inline void setColor(uint8_t c){
   espico.color = c & 0xf;
 }
 

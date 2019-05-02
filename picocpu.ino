@@ -1,7 +1,7 @@
 #define FIFO_MAX_SIZE 32
 
-#pragma GCC optimize ("-O2")
-#pragma GCC push_options
+// #pragma GCC optimize ("-O2")
+// #pragma GCC push_options
 
 int16_t reg[16] __attribute__ ((aligned));
 int16_t shadow_reg[16] __attribute__ ((aligned));
@@ -141,7 +141,7 @@ inline int16_t readInt(uint16_t adr){
 
 inline void writeMem(uint16_t adr, int16_t n){
   if(adr < RAM_SIZE) mem[adr] = n;
-  else {
+/*  else {
     switch (adr & 0xE000) {
       case SPRITE_MEMMAP:  // access sprite screen
         sprite_map[adr & 0x1fff] = n;
@@ -150,12 +150,12 @@ inline void writeMem(uint16_t adr, int16_t n){
         ((uint8_t*)(&screen))[adr & 0x1fff] = n;
         break;
     }
-  } 
+  } */ 
 }
 
 inline byte readMem(uint16_t adr){
   if (adr < RAM_SIZE) return mem[adr];
-  else {
+/*  else {
     switch (adr & 0xE000) {
       case SPRITE_MEMMAP:  // access sprite screen
         return sprite_map[adr & 0x1fff];
@@ -164,10 +164,10 @@ inline byte readMem(uint16_t adr){
       default:
         return 0;
     }
-  }
+  } */
 }
 
-void setRedraw(){
+inline void setRedraw(){
   redraw = 1;
 }
 
@@ -1020,5 +1020,5 @@ void cpuStep(){
   }
 }
 
-#pragma GCC pop_options
+// #pragma GCC pop_options
 

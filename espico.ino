@@ -112,9 +112,9 @@ void coos_screen(void){
     COOS_DELAY(50);        // 50 ms
     timeR = millis();
     // drawTiles();
-    // drawActors();
-    // testActorCollision();
-    // redrawParticles();
+    redrawActors();
+    testActorCollision();
+    redrawParticles();
     timeSpr += millis() - timeR;
     timeR = millis();
     redrawScreen();
