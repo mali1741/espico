@@ -20,7 +20,7 @@ struct Fifo_t {
   uint8_t size;
 };
 
-struct Fifo_t interruptFifo;
+struct Fifo_t interruptFifo __attribute__ ((aligned));
 
 void fifoClear(){
   interruptFifo.position_read = 0;

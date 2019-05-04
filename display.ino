@@ -21,11 +21,12 @@
 #define SPRITE_HEIGHT 8
 #define SPRITE_WIDTH  8
 #define SPRITE_WIDTH_BYTES 4
-#define SPRITE_MAP_SIZE 8192
+#define SPRITE_MAP_SIZE 4096
 #define SPRITE_ARRAY_DEF 128][64
 #define SPRITE_ADDR(n)  ((n & 0xf0) >> 2)][((n & 0xf) << 3)
 #define SPRITEPIX_ADDR(x, y) ((int(y) << 6) + (x))
-#define TILEMAP_ADDR(x, y) (4096 + (int(y) << 6) + (x))
+#define TILEMAP_SIZE 4096
+#define TILEMAP_ADDR(x, y) ((int(y) << 6) + (x))
 #define SPRITE_MEMMAP 0x8000
 
 #define PIX_LEFT_MASK(p)  ((p) & 0xf0)
@@ -145,13 +146,15 @@ static const int8_t sinT[] PROGMEM = {
 uint8_t screen[SCREEN_ARRAY_DEF] __attribute__ ((aligned));
 uint8_t sprite_map[SPRITE_MAP_SIZE] __attribute__ ((aligned));
 uint8_t line_is_draw[128] __attribute__ ((aligned));
+uint8_t sprite_flags[256] __attribute__ ((aligned));
 char charArray[340] __attribute__ ((aligned));
 uint16_t pix_buffer[256] __attribute__ ((aligned));
-struct Actor actor_table[32];
-struct Particle particles[PARTICLE_COUNT];
-struct Emitter emitter;
-struct TileMap tiles;
+struct Actor actor_table[32] __attribute__ ((aligned));
+struct Particle particles[PARTICLE_COUNT] __attribute__ ((aligned));
+struct Emitter emitter __attribute__ ((aligned));
+struct TileMap tiles __attribute__ ((aligned));
 struct EspicoState espico __attribute__ ((aligned));
+uint8_t *tile_map = &mem[RAM_SIZE-TILEMAP_SIZE];
 
 #pragma GCC optimize ("-O2")
 #pragma GCC push_options
@@ -219,7 +222,6 @@ void display_init(){
   initEspicoState();
   for(int i = 0; i < 16; i++){
     palette[i] = (uint16_t)pgm_read_word_near(bpalette + i);
-    sprtpalette[i] = (uint16_t)pgm_read_word_near(bpalette + i);
   }
   for(int i = 0; i < 32; i++){
     actor_table[i].address = 0;
@@ -247,7 +249,7 @@ void display_init(){
 }
 
 void initTileMap() {
-  tiles.adr = SPRITE_MEMMAP + TILEMAP_ADDR(0,0);
+  tiles.adr = RAM_SIZE - TILEMAP_SIZE;
   tiles.imgwidth = 8;
   tiles.imgheight = 8;
   tiles.width = 128;
@@ -1082,8 +1084,6 @@ void changePalette(uint8_t n, uint16_t c){
       }
     }
   }
-  else if(n < 32)
-    sprtpalette[n - 16] = c;
 }
 
 void scrollScreen(uint8_t step, uint8_t direction){
