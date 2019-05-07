@@ -14,20 +14,21 @@
 #define SCREEN_ARRAY_DEF SCREEN_SIZE
 #define SCREEN_ADDR(x, y) ((int(y) << 6) + int(x))
 #endif
-#define SCREEN_MEMMAP 0xA000
- 
+
 // [high-n][y][low-n][x] [n << 4][y][n&0x0f][x]
 // #define SPRITE_ARRAY_DEF 4][8][16][4
 #define SPRITE_HEIGHT 8
 #define SPRITE_WIDTH  8
 #define SPRITE_WIDTH_BYTES 4
 #define SPRITE_MAP_SIZE 4096
-#define SPRITE_ARRAY_DEF 128][64
-#define SPRITE_ADDR(n)  ((n & 0xf0) >> 2)][((n & 0xf) << 3)
-#define SPRITEPIX_ADDR(x, y) ((int(y) << 6) + (x))
+#define SPRITE_FLAGS_SIZE 256
+#define SPRITE_ARRAY_DEF SPRITE_MAP_SIZE
+#define SPRITE_ADDR(n)  (((int)(n & 0xf0) << 5) + ((n & 0x0f) << 2))
+// #define SPRITE_ARRAY_DEF 128][64
+// #define SPRITE_ADDR(n)  ((n & 0xf0) >> 2)][((n & 0xf) << 3)
+#define SPRITE_PIX(x, y) ((int(y) << 6) + (x))
 #define TILEMAP_SIZE 4096
-#define TILEMAP_ADDR(x, y) ((int(y) << 6) + (x))
-#define SPRITE_MEMMAP 0x8000
+#define TILEMAP_ADDR(x, y) ((int(y) << 7) + (x))
 
 #define PIX_LEFT_MASK(p)  ((p) & 0xf0)
 #define GET_PIX_LEFT(p)  ((p) >> 4)
@@ -63,6 +64,8 @@ struct Actor {
   int8_t collision;
   uint8_t flags; //0 0 0 0 0 0 scrolled solid
   int8_t gravity;
+  int8_t sprite;
+  int8_t frame;
   uint16_t oncollision;
   uint16_t onexitscreen;
 };
@@ -143,18 +146,18 @@ static const int8_t sinT[] PROGMEM = {
   0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe
 };
 
-uint8_t screen[SCREEN_ARRAY_DEF] __attribute__ ((aligned));
-uint8_t sprite_map[SPRITE_MAP_SIZE] __attribute__ ((aligned));
-uint8_t line_is_draw[128] __attribute__ ((aligned));
-uint8_t sprite_flags[256] __attribute__ ((aligned));
-char charArray[340] __attribute__ ((aligned));
 uint16_t pix_buffer[256] __attribute__ ((aligned));
+uint8_t screen[SCREEN_ARRAY_DEF] __attribute__ ((aligned));
+uint8_t tile_map[TILEMAP_SIZE] __attribute ((aligned));
+struct EspicoState espico __attribute__ ((aligned));
+uint8_t *line_is_draw __attribute__ ((aligned)) = &mem[PRG_SIZE+SPRITE_FLAGS_SIZE];
+uint8_t *sprite_map __attribute__ ((aligned)) = &mem[PRG_SIZE];
+uint8_t *sprite_flags __attribute__ ((aligned)) = &mem[PRG_SIZE+SPRITE_MAP_SIZE];
+char charArray[340] __attribute__ ((aligned));
 struct Actor actor_table[32] __attribute__ ((aligned));
 struct Particle particles[PARTICLE_COUNT] __attribute__ ((aligned));
 struct Emitter emitter __attribute__ ((aligned));
 struct TileMap tiles __attribute__ ((aligned));
-struct EspicoState espico __attribute__ ((aligned));
-uint8_t *tile_map = &mem[RAM_SIZE-TILEMAP_SIZE];
 
 #pragma GCC optimize ("-O2")
 #pragma GCC push_options
@@ -236,7 +239,10 @@ void display_init(){
     actor_table[i].collision = -1;
     actor_table[i].flags = 2; //scrolled = 1 solid = 0
     actor_table[i].gravity = 0;
+    actor_table[i].sprite = 5;
+    actor_table[i].frame = 0;
     actor_table[i].oncollision = 0;
+    actor_table[i].onexitscreen = 0;
   }
   emitter.time = 0;
   emitter.timer = 0;
@@ -246,14 +252,6 @@ void display_init(){
   for(int i = 0; i < 340; i++)
     charArray[i] = 0;
   clearScr(0);
-}
-
-void initTileMap() {
-  tiles.adr = RAM_SIZE - TILEMAP_SIZE;
-  tiles.imgwidth = 8;
-  tiles.imgheight = 8;
-  tiles.width = 128;
-  tiles.height = 32;
 }
 
 void initEspicoState() {
@@ -734,7 +732,77 @@ inline void drawSprPixel(int8_t pixel, int8_t x0, int8_t y0, int16_t x, int16_t 
   }
 }
 
-void drawActor(int8_t n, int16_t x, int16_t y){
+/*
+void drawSprite(int8_t n, int16_t x0, int16_t y0, int16_t w = 8, int16_t h = 8){
+  uint8_t *adr = (uint8_t *)&(sprite_map[SPRITE_ADDR(n)]);
+  uint8_t w2 = w >> 1;
+  uint8_t w1 = w & 1;
+  uint8_t pixel;
+  int16_t x;
+
+  for(byte y1 = 0; y1 < h; y1 ++) {
+    x = x0;
+    for(byte x1 = 0; x1 < w2; x1++){
+      pixel = adr[SPRITE_PIX(x1,y1)];
+      if(PIX_LEFT_MASK(pixel) > 0)
+        setPix(x, y0+y1, GET_PIX_LEFT(pixel));
+      if(PIX_RIGHT_MASK(pixel) > 0)
+        setPix(x+1, y0+y1, GET_PIX_RIGHT(pixel));
+      x += 2;
+    }
+    if (w1) {
+      pixel = adr[SPRITE_PIX(w2,y1)];
+      if(PIX_LEFT_MASK(pixel) > 0)
+        setPix(x, y0+y1, GET_PIX_LEFT(pixel));
+    }
+  }
+}
+/*
+void drawActor(int8_t n) {
+  int16_t x = actor_table[n].x;
+  int16_t y = actor_table[n].y;
+  uint8_t *adr = (uint8_t *)&(sprite_map[SPRITE_ADDR(actor_table[n].sprite+actor_table[n].frame)]);
+  uint8_t w2 = actor_table[n].width >> 1;
+  uint8_t w1 = actor_table[n].width & 1;
+  uint8_t h = actor_table[n].height;
+  uint8_t pixel;
+
+  if(actor_table[n].angle == 0){
+    drawSprite(actor_table[n].sprite+actor_table[n].frame, actor_table[n].x, actor_table[n].y, actor_table[n].width, actor_table[n].height);
+    for(byte y1 = 0; y1 < h; y1 ++) {
+      x = actor_table[n].x;
+      for(byte x1 = 0; x1 < w2; x1++){
+        pixel = adr[SPRITE_PIX(x1,y1)];
+        if(PIX_LEFT_MASK(pixel) > 0)
+          setPix(x, y+y1, GET_PIX_LEFT(pixel));
+        if(PIX_RIGHT_MASK(pixel) > 0)
+          setPix(x+1, y+y1, GET_PIX_RIGHT(pixel));
+        x += 2;
+      }
+      if (w1) {
+        pixel = adr[SPRITE_PIX(w2,y1)];
+        if(PIX_LEFT_MASK(pixel) > 0)
+          setPix(x, y+y1, GET_PIX_LEFT(pixel));
+      }
+    }
+  }else{
+     int16_t c = getCos(actor_table[n].angle);
+     int16_t s = getSin(actor_table[n].angle);
+     for(byte y1 = 0; y1 < h; y1 ++)
+      if(y1 + y >= -h && y1 + y < 128 + h){
+        for(byte x1 = 0; x1 < w2; x1++)
+          if(x1 + x >= -w2 && x1 + x < 128 + w2){
+            pixel = adr[SPRITE_PIX(x1,y1)];
+            if(PIX_LEFT_MASK(pixel) > 0)
+              drawRotateSprPixel(GET_PIX_LEFT(pixel), x, y, x1 * 2, y1, w2, h / 2, c, s);
+            if(PIX_RIGHT_MASK(pixel) > 0)
+              drawRotateSprPixel(GET_PIX_RIGHT(pixel), x, y, x1 * 2 + 1, y1, w2, h / 2, c, s);
+          }
+      }
+  }
+}
+*/
+void drawActor(int8_t n, uint16_t x, uint16_t y){
   uint16_t adr = actor_table[n].address;
   uint8_t w = actor_table[n].width;
   uint8_t h = actor_table[n].height;
@@ -974,6 +1042,25 @@ void loadTileMap(int16_t adr, uint8_t iwidth, uint8_t iheight, uint8_t width, ui
     tiles.width = width;
     tiles.height = height;
   }
+
+/*
+void drawTileMap(int16_t x0, int16_t y0, int16_t celx, int16_t cely, int16_t celw, int16_t celh, uint8_t layer = 0xff){
+    int16_t x, y, nx, ny;
+    uint8_t spr;
+    for(x = 0; x < celw; x++){
+      nx = x0 + x * 8;
+      for(y = 0; y < celh; y++){
+        spr = tile_map[TILEMAP_ADDR(celx+x, cely+y)];
+        ny = y0 + y * 8;
+        if (spr > 0) drawSprite(spr, nx, ny);
+      }
+    }
+}
+
+void testTileMap() {
+  drawTileMap(0,8,0,0,16,16);
+}
+*/
 
 void drawTiles(int16_t x0, int16_t y0){
     int16_t x, y, nx, ny;

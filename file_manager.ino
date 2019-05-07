@@ -148,7 +148,7 @@ void loadEPO(char fileName[]){
             if (strcmp(hex, "epo__") == 0) {
               Serial.println(F(" found epo header"));
               store = mem;
-              max_bytes = RAM_SIZE;
+              max_bytes = PRG_SIZE;
               bytes_read = 0;
             } else if (strcmp(hex, "gfx__") == 0) {
               Serial.println(F(" found gfx header"));
