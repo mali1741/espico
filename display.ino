@@ -20,15 +20,17 @@
 #define SPRITE_HEIGHT 8
 #define SPRITE_WIDTH  8
 #define SPRITE_WIDTH_BYTES 4
+#define SPRITE_COUNT 128
 #define SPRITE_MAP_SIZE 4096
 #define SPRITE_FLAGS_SIZE 256
 #define SPRITE_ARRAY_DEF SPRITE_MAP_SIZE
+#define SPRITE_MEMMAP PRG_SIZE
 #define SPRITE_ADDR(n)  (((int)(n & 0xf0) << 5) + ((n & 0x0f) << 2))
 // #define SPRITE_ARRAY_DEF 128][64
 // #define SPRITE_ADDR(n)  ((n & 0xf0) >> 2)][((n & 0xf) << 3)
 #define SPRITE_PIX(x, y) ((int(y) << 6) + (x))
 #define TILEMAP_SIZE 4096
-#define TILEMAP_ADDR(x, y) ((int(y) << 7) + (x))
+#define TILEMAP_ADDR(x, y) ((int((y)&31) << 7) + ((x)&127))
 
 #define PIX_LEFT_MASK(p)  ((p) & 0xf0)
 #define GET_PIX_LEFT(p)  ((p) >> 4)
@@ -46,13 +48,19 @@ struct EspicoState {
   int8_t   drawdone;
   int8_t   color;
   int8_t   bgcolor;
+  int16_t  fillpattern;
+  int16_t  palt;
   int8_t   imageSize;
   int8_t   regx;
   int8_t   regy;
 };  
 
+#define ACTOR_ON_TILE   0x8000
+#define ACTOR_TO_TILE_Y 0x4000
+#define ACTOR_TO_TILE_X 0x2000
+
 struct Actor {
-  uint16_t address;
+  uint16_t sprite;
   int16_t x;
   int16_t y;
   uint8_t width;
@@ -64,7 +72,6 @@ struct Actor {
   int8_t collision;
   uint8_t flags; //0 0 0 0 0 0 scrolled solid
   int8_t gravity;
-  int8_t sprite;
   int8_t frame;
   uint16_t oncollision;
   uint16_t onexitscreen;
@@ -93,16 +100,6 @@ struct Emitter {
   int8_t speedx1;
   int8_t speedy1;
   int8_t color;
-};
-
-struct TileMap { 
-  int16_t adr;
-  uint8_t imgwidth;
-  uint8_t imgheight;
-  uint8_t width;
-  uint8_t height;
-  int16_t x;
-  int16_t y;
 };
 
 static const int8_t cosT[] PROGMEM = {
@@ -146,36 +143,133 @@ static const int8_t sinT[] PROGMEM = {
   0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe
 };
 
+static const uint16_t epalette[] PROGMEM = {
+     0x0000, 0x194A, 0x792A, 0x042A, 0xAA86, 0x5AA9, 0xC618, 0xFF9D,
+     0xF809, 0xFD00, 0xFF64, 0x0726, 0x2D7F, 0x83B3, 0xFBB5, 0xFE75
+};
+
+uint16_t palette[16] __attribute__ ((aligned));
+uint8_t drwpalette[16] __attribute__ ((aligned));
 uint16_t pix_buffer[256] __attribute__ ((aligned));
 uint8_t screen[SCREEN_ARRAY_DEF] __attribute__ ((aligned));
 uint8_t tile_map[TILEMAP_SIZE] __attribute ((aligned));
 struct EspicoState espico __attribute__ ((aligned));
-uint8_t *line_is_draw __attribute__ ((aligned)) = &mem[PRG_SIZE+SPRITE_FLAGS_SIZE];
-uint8_t *sprite_map __attribute__ ((aligned)) = &mem[PRG_SIZE];
-uint8_t *sprite_flags __attribute__ ((aligned)) = &mem[PRG_SIZE+SPRITE_MAP_SIZE];
+// uint16_t *palette __attribute__ ((aligned)) = (uint16_t *)&mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE+128];
+//uint8_t *drwpalette __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE+128+32];
+uint8_t *line_is_draw __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE];
+uint8_t *sprite_map __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP];
+uint8_t *sprite_flags __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE];
 char charArray[340] __attribute__ ((aligned));
 struct Actor actor_table[32] __attribute__ ((aligned));
 struct Particle particles[PARTICLE_COUNT] __attribute__ ((aligned));
 struct Emitter emitter __attribute__ ((aligned));
-struct TileMap tiles __attribute__ ((aligned));
+// struct TileMap tiles __attribute__ ((aligned));
 
 #pragma GCC optimize ("-O2")
 #pragma GCC push_options
 
-int16_t getCos(int16_t g){
+inline int16_t getCos(int16_t g){
   g = g % 360;
   if(g < 0)
     g += 360;
   return (int16_t)(int8_t)pgm_read_byte_near(cosT + g);
 }
 
-int16_t getSin(int16_t g){
+inline int16_t getSin(int16_t g){
   g = g % 360;
   if(g < 0)
     g += 360;
   return (int16_t)(int8_t)pgm_read_byte_near(sinT + g);
 }
 
+
+int16_t atan2_rb(int16_t y, int16_t x) {
+   // Fast XY vector to integer degree algorithm - Jan 2011 www.RomanBlack.com
+   // Converts any XY values including 0 to a degree value that should be
+   // within +/- 1 degree of the accurate value without needing
+   // large slow trig functions like ArcTan() or ArcCos().
+   // NOTE! at least one of the X or Y values must be non-zero!
+   // This is the full version, for all 4 quadrants and will generate
+   // the angle in integer degrees from 0-360.
+   // Any values of X and Y are usable including negative values provided
+   // they are between -1456 and 1456 so the 16bit multiply does not overflow.
+
+   unsigned char negflag;
+   unsigned char tempdegree;
+   unsigned char comp;
+   unsigned int degree;     // this will hold the result
+//   signed int x;            // these hold the XY vector at the start
+//   signed int y;            // (and they will be destroyed)
+   unsigned int ux;
+   unsigned int uy;
+
+   // Save the sign flags then remove signs and get XY as unsigned ints
+   negflag = 0;
+   if(x < 0)
+   {
+      negflag += 0x01;    // x flag bit
+      x = (0 - x);        // is now +
+   }
+   ux = x;                // copy to unsigned var before multiply
+   if(y < 0)
+   {
+      negflag += 0x02;    // y flag bit
+      y = (0 - y);        // is now +
+   }
+   uy = y;                // copy to unsigned var before multiply
+
+   // 1. Calc the scaled "degrees"
+   if(ux > uy)
+   {
+      degree = (uy * 45) / ux;   // degree result will be 0-45 range
+      negflag += 0x10;    // octant flag bit
+   }
+   else
+   {
+      degree = (ux * 45) / uy;   // degree result will be 0-45 range
+   }
+
+   // 2. Compensate for the 4 degree error curve
+   comp = 0;
+   tempdegree = degree;    // use an unsigned char for speed!
+   if(tempdegree > 22)      // if top half of range
+   {
+      if(tempdegree <= 44) comp++;
+      if(tempdegree <= 41) comp++;
+      if(tempdegree <= 37) comp++;
+      if(tempdegree <= 32) comp++;  // max is 4 degrees compensated
+   }
+   else    // else is lower half of range
+   {
+      if(tempdegree >= 2) comp++;
+      if(tempdegree >= 6) comp++;
+      if(tempdegree >= 10) comp++;
+      if(tempdegree >= 15) comp++;  // max is 4 degrees compensated
+   }
+   degree += comp;   // degree is now accurate to +/- 1 degree!
+
+   // Invert degree if it was X>Y octant, makes 0-45 into 90-45
+   if(negflag & 0x10) degree = (90 - degree);
+
+   // 3. Degree is now 0-90 range for this quadrant,
+   // need to invert it for whichever quadrant it was in
+   if(negflag & 0x02)   // if -Y
+   {
+      if(negflag & 0x01)   // if -Y -X
+            degree = (180 + degree);
+      else        // else is -Y +X
+            degree = (180 - degree);
+   }
+   else    // else is +Y
+   {
+      if(negflag & 0x01)   // if +Y -X
+            degree = (360 - degree);
+   }
+
+   return degree;
+}
+
+/*
 #define MULTIPLY_FP_RESOLUTION_BITS  6
 
 int16_t atan2_fp(int16_t y_fp, int16_t x_fp){
@@ -220,14 +314,21 @@ int16_t atan2_fp(int16_t y_fp, int16_t x_fp){
   else
     return (angle);
 }
+*/
+
+void resetPalette() {
+  for(int i = 0; i < 16; i++){
+    palette[i] = (uint16_t)pgm_read_word_near(epalette + i);
+    drwpalette[i] = i;
+  }
+  espico.palt = 1; // black is transparent
+}
 
 void display_init(){
   initEspicoState();
-  for(int i = 0; i < 16; i++){
-    palette[i] = (uint16_t)pgm_read_word_near(bpalette + i);
-  }
+  resetPalette();
   for(int i = 0; i < 32; i++){
-    actor_table[i].address = 0;
+    actor_table[i].sprite = 5;
     actor_table[i].x = -255;
     actor_table[i].y = -255;
     actor_table[i].width = 8;
@@ -239,14 +340,13 @@ void display_init(){
     actor_table[i].collision = -1;
     actor_table[i].flags = 2; //scrolled = 1 solid = 0
     actor_table[i].gravity = 0;
-    actor_table[i].sprite = 5;
     actor_table[i].frame = 0;
     actor_table[i].oncollision = 0;
     actor_table[i].onexitscreen = 0;
   }
   emitter.time = 0;
   emitter.timer = 0;
-  tiles.adr = 0;
+//  tiles.adr = 0;
   for(int i = 0; i < PARTICLE_COUNT; i++)
     particles[i].time = 0;
   for(int i = 0; i < 340; i++)
@@ -259,8 +359,9 @@ void initEspicoState() {
   espico.ondraw = 0;
   espico.updatedone = 0;
   espico.drawdone = 0;
-  espico.color = 1;
+  espico.color = 7;
   espico.bgcolor = 0;
+  espico.fillpattern = 0;
   espico.imageSize = 1;
   espico.regx = 0;
   espico.regy = 0;
@@ -283,33 +384,6 @@ void setEspicoState(int16_t s, int16_t v) {
   }
 }  
 
-int8_t randomD(int8_t a, int8_t b) {
-  int8_t minv = a < b ? a : b;
-  int8_t maxv = a > b ? a : b;
-  return random(minv, maxv + 1);
-}
-
-void setParticle(int8_t gravity, uint8_t count, uint16_t time){
-  emitter.gravity = gravity;
-  emitter.count = count;
-  emitter.timeparticle = time;
-}
-
-void setEmitter(uint16_t time, int16_t dir, int16_t dir1, int16_t speed){
-  emitter.time = time;
-  emitter.speedx = (int8_t)((speed * getCos(dir)) >> 6);
-  emitter.speedy = (int8_t)((speed * getSin(dir)) >> 6);
-  emitter.speedx1 = (int8_t)((speed * getCos(dir1)) >> 6);
-  emitter.speedy1 = (int8_t)((speed * getSin(dir1)) >> 6);
-}
-
-void drawParticle(int16_t x, int16_t y, uint8_t color){
-  emitter.x = x;
-  emitter.y = y;
-  emitter.color = color;
-  emitter.timer = emitter.time;
-}
-
 void updateGame() {
   if (espico.onupdate > 0)
     setinterrupt(espico.onupdate, 0);
@@ -320,7 +394,7 @@ void drawBuffer() {
     setinterrupt(espico.ondraw, 0);
 }
 
-void redrawScreen(){
+void redrawScreen() {
   int i;
   if (espico.ondraw != 0 && !espico.drawdone) return;
   cadr_count++;
@@ -378,19 +452,44 @@ void redrawScreen(){
       line_is_draw[y] = 0;
     }
   }
+  setRedraw();
+}
+
+int8_t randomD(int8_t a, int8_t b) {
+  int8_t minv = a < b ? a : b;
+  int8_t maxv = a > b ? a : b;
+  return random(minv, maxv + 1);
+}
+
+void setParticle(int8_t gravity, uint8_t count, uint16_t time){
+  emitter.gravity = gravity;
+  emitter.count = count;
+  emitter.timeparticle = time;
+}
+
+void setEmitter(uint16_t time, int16_t dir, int16_t dir1, int16_t speed){
+  emitter.time = time;
+  emitter.speedx = (int8_t)((speed * getCos(dir)) >> 6);
+  emitter.speedy = (int8_t)((speed * getSin(dir)) >> 6);
+  emitter.speedx1 = (int8_t)((speed * getCos(dir1)) >> 6);
+  emitter.speedy1 = (int8_t)((speed * getSin(dir1)) >> 6);
+}
+
+void drawParticle(int16_t x, int16_t y, uint8_t color){
+  emitter.x = x;
+  emitter.y = y;
+  emitter.color = color;
+  emitter.timer = emitter.time;
 }
 
 void redrawParticles(){
-  int16_t i, n;
+  int16_t n;
+  const int i = emitter.count;
   uint8_t x, y;
   if(emitter.timer > 0){
       emitter.timer -= 50;
-      i = emitter.count;
-      for(n = 0; n < PARTICLE_COUNT; n++){
-        if(i == 0)
-          break;
+      for(n = 0; n < i; n++){
         if(particles[n].time <= 0){
-          i--;
           particles[n].time = emitter.timeparticle;
           particles[n].x = emitter.x;
           particles[n].y = emitter.y;
@@ -403,13 +502,7 @@ void redrawParticles(){
     }
     for(n = 0; n < PARTICLE_COUNT; n++)
       if(particles[n].time > 0){
-        x = (particles[n].x & 127) / 2;
-        y = particles[n].y & 127;
-        if(particles[n].x & 1)
-          SET_PIX_RIGHT(screen[SCREEN_ADDR(x,y)],particles[n].color); 
-        else
-          SET_PIX_LEFT(screen[SCREEN_ADDR(x,y)],particles[n].color);
-        line_is_draw[y] |= 1 + x / 32;
+        setPix(particles[n].x, particles[n].y, drwpalette[particles[n].color]); 
         particles[n].time -= 50;
         if(random(0,2)){
           particles[n].x += particles[n].speedx;
@@ -432,45 +525,42 @@ int8_t getActorInXY(int16_t x, int16_t y){
         actor_table[n].y < y  && actor_table[n].y + actor_table[n].height > y)
           return n;
   }
-  return - 1;
+  return -1;
 }
 
-void redrawActors(){
-  for(int i = 0; i < 32; i++){
-    if(actor_table[i].lives > 0){   
-      actor_table[i].speedy += actor_table[i].gravity;
-      actor_table[i].x += actor_table[i].speedx;
-      actor_table[i].y += actor_table[i].speedy;
-      if(actor_table[i].x + actor_table[i].width < 0 || actor_table[i].x > 127 || actor_table[i].y + actor_table[i].height < 0 || actor_table[i].y > 127){
-        if(actor_table[i].onexitscreen > 0)
-           setinterrupt(actor_table[i].onexitscreen, i);
-      }
-      else
-        drawActor(i, actor_table[i].x, actor_table[i].y);
+void moveActor(int16_t i) {
+  int n = i+1;
+  if (i == -1) {
+    i = 0;
+    n = 32;
+  }
+ for(; i < n; i++) 
+  if(actor_table[i].lives > 0){   
+    actor_table[i].speedy += actor_table[i].gravity;
+    actor_table[i].x += actor_table[i].speedx;
+    actor_table[i].y += actor_table[i].speedy;
+    if(actor_table[i].x + actor_table[i].width < 0 || actor_table[i].x > 127 || actor_table[i].y + actor_table[i].height < 0 || actor_table[i].y > 127){
+      if(actor_table[i].onexitscreen > 0)
+         setinterrupt(actor_table[i].onexitscreen, i);
     }
   }
 }
 
-uint16_t getTileInXY(int16_t x, int16_t y){
-  if(x < tiles.x || y < tiles.y || x > tiles.x + tiles.imgwidth * tiles.width || tiles.y > tiles.imgheight * tiles.height)
-    return 0;
-  return readInt(tiles.adr + (((x - tiles.x) / tiles.imgwidth) + ((y - tiles.y) / tiles.imgheight) * tiles.width) * 2);
+inline uint8_t getTile(int16_t x, int16_t y){
+  return tile_map[TILEMAP_ADDR(x,y)];
 }
 
-uint16_t getTile(int16_t x, int16_t y){
-  if(x < 0 || x >= tiles.width || y < 0 || y >= tiles.height)
-    return 0;
-  return readInt(tiles.adr + (x + y * tiles.width) * 2);
+inline void setTile(int16_t x, int16_t y, uint8_t v){
+  tile_map[TILEMAP_ADDR(x,y)] = v;
 }
 
 void testActorCollision(){
   byte n, i;
-  int16_t x0, y0, newspeed;
   for(n = 0; n < 32; n++)
     actor_table[n].collision = -1;
   for(n = 0; n < 32; n++){
     if(actor_table[n].lives > 0){
-      for(i = 0; i < n; i++){
+      for(i = n+1; i < 32; i++){
         if(actor_table[i].lives > 0){
           if(actor_table[n].x < actor_table[i].x + actor_table[i].width && 
           actor_table[n].x + actor_table[n].width > actor_table[i].x &&
@@ -482,115 +572,84 @@ void testActorCollision(){
               setinterrupt(actor_table[n].oncollision, n);
             if(actor_table[i].oncollision > 0)
               setinterrupt(actor_table[i].oncollision, i);
-            if((actor_table[n].flags & 1) != 0 && (actor_table[n].flags & 1) != 0){
-              if((actor_table[n].speedx >= 0 && actor_table[i].speedx <= 0) || (actor_table[n].speedx <= 0 && actor_table[i].speedx >= 0)){
-                newspeed = (abs(actor_table[n].speedx) + abs(actor_table[i].speedx)) / 2;
-                if(actor_table[n].x > actor_table[i].x){
-                  actor_table[n].speedx = newspeed;
-                  actor_table[i].speedx = -newspeed;
-                }
-                else{
-                  actor_table[n].speedx = -newspeed;
-                  actor_table[i].speedx = newspeed;
-                }
-                actor_table[n].x -= 2;
-              }
-              if((actor_table[n].speedy >= 0 && actor_table[i].speedy <= 0) || (actor_table[n].speedy <= 0 && actor_table[i].speedy >= 0)){
-                newspeed = (abs(actor_table[n].speedy) + abs(actor_table[i].speedy)) / 2;
-                if(actor_table[n].y > actor_table[i].y){
-                  actor_table[n].speedy = newspeed;
-                  actor_table[i].speedy = -newspeed;
-                }
-                else{
-                  actor_table[n].speedy = -newspeed;
-                  actor_table[i].speedy = newspeed;
-                }
-                actor_table[n].y -=  2;
-              }
-            }
           }
         }
       }
-      if((actor_table[n].flags & 2) != 0 && tiles.adr > 0){
-          x0 = ((actor_table[n].x + actor_table[n].width / 2 - tiles.x) / (int16_t)tiles.imgwidth);
-          y0 = ((actor_table[n].y + actor_table[n].height / 2 - tiles.y + tiles.imgheight) / (int16_t)tiles.imgheight) - 1;
-          if(x0 >= -1 && x0 <= tiles.width && y0 >= -1 && y0 <= tiles.height){
-            if(getTile(x0, y0) != 0){
-              if(actor_table[n].speedx != 0){
-                if(actor_table[n].speedx > 0){
-                  actor_table[n].x = tiles.x + x0 * tiles.imgwidth - actor_table[n].width ;
-                  actor_table[n].speedx /= 2;
-                }
-                else{
-                  actor_table[n].x = tiles.x + (x0 + 1) * tiles.imgwidth;
-                  actor_table[n].speedx /= 2;
-                }
-              }
-              if(actor_table[n].speedy != 0){
-                if(actor_table[n].speedy > 0){
-                  actor_table[n].y = tiles.y + y0 * tiles.imgheight - actor_table[n].height ;
-                  actor_table[n].speedy /= 2;
-                }
-                else{
-                  actor_table[n].y = tiles.y + (y0 + 1) * tiles.imgheight;
-                  actor_table[n].speedy /= 2;
-                }
-              }
-            }
-            else{
-              if(actor_table[n].speedy > 0 && getTile(x0, y0 + 1) != 0){
-                if((tiles.y + (y0 + 1) * tiles.imgheight) - (actor_table[n].y  + actor_table[n].height) < actor_table[n].speedy * 2){
-                  actor_table[n].y = tiles.y + (y0 + 1) * tiles.imgheight - actor_table[n].height;  
-                  actor_table[n].speedy = 0;
-                }
-              }
-              else if(actor_table[n].speedy < 0 && getTile(x0, y0 - 1) != 0){
-                if(actor_table[n].y - (tiles.y + y0 * tiles.imgheight) < actor_table[n].speedy * 2){
-                  actor_table[n].y = tiles.y + y0 * tiles.imgheight;  
-                  actor_table[n].speedy = 0;
-                }
-              }
-              if(actor_table[n].speedx > 0  && getTile(x0 + 1, y0) != 0){
-                if((tiles.x + (x0 + 1) * tiles.imgwidth - actor_table[n].width) - actor_table[n].x < actor_table[n].speedx * 2){
-                  actor_table[n].x = tiles.x + (x0 + 1) * tiles.imgwidth - actor_table[n].width;  
-                  actor_table[n].speedx = 0;
-                }
-              }
-              else if(actor_table[n].speedx < 0 && getTile(x0 - 1, y0) != 0){
-                if(actor_table[n].x - (tiles.x + x0 * tiles.imgwidth) < actor_table[n].speedx * 2){
-                  actor_table[n].x = tiles.x + x0 * tiles.imgwidth; 
-                  actor_table[n].speedx = 0;
-                }
-              } 
-            } 
-          }
-        }
-        
     }
   }
 }
 
-void clearScr(uint8_t color){
+void testActorMap(int16_t tx, int16_t ty, int16_t tw, int16_t th, uint8_t flags) {
+  int16_t x0, y0;
+  for(int n = 0; n < 32; n++){
+    if(actor_table[n].lives > 0){
+      if((actor_table[n].flags & 2) != 0){
+          // check these to be more than 0
+          x0 = ((actor_table[n].x + actor_table[n].width / 2 - tx) / (int16_t)SPRITE_WIDTH);
+          y0 = ((actor_table[n].y + actor_table[n].height / 2 - ty + SPRITE_HEIGHT) / (int16_t)SPRITE_HEIGHT) - 1;
+          if(x0 >= 0 && x0 < tw && y0 >= 0 && y0 < th){
+            if(sprite_flags[getTile(x0,y0)] & flags){
+              actor_table[n].collision = (y0 << 8) + x0;
+              actor_table[n].collision |= ACTOR_ON_TILE;
+              if(actor_table[n].oncollision > 0)
+                setinterrupt(actor_table[n].oncollision, n); 
+            } else {
+              if(actor_table[n].speedy > 0 && (sprite_flags[getTile(x0, y0 + 1)] & flags)){
+                if((ty + (y0 + 1) * SPRITE_HEIGHT) - (actor_table[n].y  + actor_table[n].height) < actor_table[n].speedy * 2){
+                  actor_table[n].collision = (y0 << 8) + x0;
+                  actor_table[n].collision |= ACTOR_TO_TILE_Y;
+                  if(actor_table[n].oncollision > 0)
+                    setinterrupt(actor_table[n].oncollision, n); 
+                }
+              } else if(actor_table[n].speedy < 0 && (sprite_flags[getTile(x0, y0 - 1)] & flags)){
+                if(actor_table[n].y - (ty + y0 * SPRITE_HEIGHT) < actor_table[n].speedy * 2){
+                  actor_table[n].collision = (y0 << 8) + x0;
+                  actor_table[n].collision |= ACTOR_TO_TILE_Y;
+                  if(actor_table[n].oncollision > 0)
+                    setinterrupt(actor_table[n].oncollision, n); 
+                }
+              }
+              if(actor_table[n].speedx > 0  && (sprite_flags[getTile(x0 + 1, y0)] & flags)){
+                if((tx + (x0 + 1) * SPRITE_WIDTH - actor_table[n].width) - actor_table[n].x < actor_table[n].speedx * 2){
+                  actor_table[n].collision = (y0 << 8) + x0;
+                  actor_table[n].collision |= ACTOR_TO_TILE_X;
+                  if(actor_table[n].oncollision > 0)
+                    setinterrupt(actor_table[n].oncollision, n); 
+                }
+              } else if(actor_table[n].speedx < 0 && (sprite_flags[getTile(x0 - 1, y0)] & flags)){
+                if(actor_table[n].x - (tx + x0 * SPRITE_WIDTH) < actor_table[n].speedx * 2){
+                  actor_table[n].collision = (y0 << 8) + x0;
+                  actor_table[n].collision |= ACTOR_TO_TILE_X;
+                  if(actor_table[n].oncollision > 0)
+                    setinterrupt(actor_table[n].oncollision, n); 
+                }
+              } 
+            } 
+          }
+        }   
+    }
+  }
+}
+
+inline void clearScr(uint8_t color){
   /*
   for(uint8_t y = 0; y < 128; y ++){
     for(uint8_t x = 0; x < 128; x++)
       setPix(x, y, color);
   }
   */
-  uint8_t twocolor = ((color << 4) | (color & 0x0f));
+  
+  uint8_t twocolor = ((drwpalette[color] << 4) | (drwpalette[color] & 0x0f));
   memset(screen, twocolor, SCREEN_SIZE);
   memset(line_is_draw, 3, 128);
-//  for (int y = 0; y < 128; y++) 
-//    line_is_draw[y] |= 3;
-
 }
 
 void setImageSize(uint8_t size){
   espico.imageSize = size;
 }
 
-void setActorSprite(uint16_t n, uint16_t adr){
-  actor_table[n].address = adr;
+void setActorSprite(uint16_t n, uint16_t spr){
+  actor_table[n].sprite = (spr < SPRITE_COUNT) ? spr : 0; 
 }
 
 void setActorPosition(int8_t n, uint16_t x, uint16_t y){
@@ -603,27 +662,14 @@ void actorSetDirectionAndSpeed(int8_t n, uint16_t speed, int16_t dir){
   actor_table[n].speedy = ((speed * getSin(dir)) >> 6);
 }
 
-void setActorWidth(int8_t n, uint8_t w){
-  actor_table[n].width = w;
-}
 
-void setActorHeight(int8_t n, uint8_t w){
-  actor_table[n].height = w;
-}
-
-void setActorSpeedx(int8_t n, int8_t s){
-  actor_table[n].speedx = s;
-}
-
-void setActorSpeedy(int8_t n, int8_t s){
-  actor_table[n].speedy = s;
-}
 
 int16_t angleBetweenActors(int8_t n1, int8_t n2){
-  int16_t A = atan2_fp(actor_table[n1].y - actor_table[n2].y, actor_table[n1].x - actor_table[n2].x);
-  A = (A < 0) ? A + 360 : A;
+  int16_t A = atan2_rb(actor_table[n1].y - actor_table[n2].y, actor_table[n1].x - actor_table[n2].x);
+ // A = (A < 0) ? A + 360 : A;
   return A;
 }
+
 
 int16_t getActorValue(int8_t n, uint8_t t){
   switch(t){
@@ -683,6 +729,7 @@ void setActorValue(int8_t n, uint8_t t, int16_t v){
       actor_table[n].lives = v;
       return;
     case 8:
+      // Collision cannot be set
       return;
     case 9:
       if(v != 0)
@@ -708,32 +755,9 @@ void setActorValue(int8_t n, uint8_t t, int16_t v){
  }
 }
 
-void drawRotateSprPixel(int8_t pixel, int8_t x0, int8_t y0, int16_t x, int16_t y, int16_t hw, int16_t hh, int16_t c, int16_t s){
-  int16_t nx = hw + (((x - hw) * c - (y - hh) * s) >> 6);
-  int16_t ny = hh + (((y - hh) * c + (x - hw) * s) >> 6);
-  int16_t nnx = nx / 2;
-  int8_t nnx0 = x0 / 2;
-  if(nnx0 + nnx >= 0 && nnx0 + nnx < 64 && y0 + ny >= 0 && y0 + ny < 128){
-    if(nx & 1)
-      SET_PIX_RIGHT(screen[SCREEN_ADDR(nnx0 + nnx, y0 + ny)], pixel);
-    else
-      SET_PIX_LEFT(screen[SCREEN_ADDR(nnx0 + nnx, y0 + ny)], pixel);
-    line_is_draw[y0 + ny] |= 1 + (nnx0 + nnx) / 32;
-  }
-}
-
-inline void drawSprPixel(int8_t pixel, int8_t x0, int8_t y0, int16_t x, int16_t y){
-  if(x0 + x >= 0 && x0 + x < 128 && y0 + y >= 0 && y0 + y < 128){
-    if((x0 + x) & 1)
-      SET_PIX_RIGHT(screen[SCREEN_ADDR((x0 + x) / 2, y0 + y)], pixel);
-    else
-      SET_PIX_LEFT(screen[SCREEN_ADDR((x0 + x) / 2, y0 + y)], pixel);
-    line_is_draw[y0 + y] |= 1 + (x0 + x) / 64;
-  }
-}
-
-/*
-void drawSprite(int8_t n, int16_t x0, int16_t y0, int16_t w = 8, int16_t h = 8){
+void drawSprite(int8_t n, int16_t x0, int16_t y0, int16_t w, int16_t h){
+  drawImg(SPRITE_MEMMAP+SPRITE_ADDR(n), x0, y0, w, h);
+  /*
   uint8_t *adr = (uint8_t *)&(sprite_map[SPRITE_ADDR(n)]);
   uint8_t w2 = w >> 1;
   uint8_t w1 = w & 1;
@@ -756,353 +780,179 @@ void drawSprite(int8_t n, int16_t x0, int16_t y0, int16_t w = 8, int16_t h = 8){
         setPix(x, y0+y1, GET_PIX_LEFT(pixel));
     }
   }
+  */
 }
-/*
-void drawActor(int8_t n) {
-  int16_t x = actor_table[n].x;
-  int16_t y = actor_table[n].y;
-  uint8_t *adr = (uint8_t *)&(sprite_map[SPRITE_ADDR(actor_table[n].sprite+actor_table[n].frame)]);
-  uint8_t w2 = actor_table[n].width >> 1;
-  uint8_t w1 = actor_table[n].width & 1;
-  uint8_t h = actor_table[n].height;
-  uint8_t pixel;
 
-  if(actor_table[n].angle == 0){
-    drawSprite(actor_table[n].sprite+actor_table[n].frame, actor_table[n].x, actor_table[n].y, actor_table[n].width, actor_table[n].height);
-    for(byte y1 = 0; y1 < h; y1 ++) {
-      x = actor_table[n].x;
-      for(byte x1 = 0; x1 < w2; x1++){
-        pixel = adr[SPRITE_PIX(x1,y1)];
-        if(PIX_LEFT_MASK(pixel) > 0)
-          setPix(x, y+y1, GET_PIX_LEFT(pixel));
-        if(PIX_RIGHT_MASK(pixel) > 0)
-          setPix(x+1, y+y1, GET_PIX_RIGHT(pixel));
-        x += 2;
-      }
-      if (w1) {
-        pixel = adr[SPRITE_PIX(w2,y1)];
-        if(PIX_LEFT_MASK(pixel) > 0)
-          setPix(x, y+y1, GET_PIX_LEFT(pixel));
-      }
-    }
-  }else{
-     int16_t c = getCos(actor_table[n].angle);
-     int16_t s = getSin(actor_table[n].angle);
-     for(byte y1 = 0; y1 < h; y1 ++)
-      if(y1 + y >= -h && y1 + y < 128 + h){
-        for(byte x1 = 0; x1 < w2; x1++)
-          if(x1 + x >= -w2 && x1 + x < 128 + w2){
-            pixel = adr[SPRITE_PIX(x1,y1)];
-            if(PIX_LEFT_MASK(pixel) > 0)
-              drawRotateSprPixel(GET_PIX_LEFT(pixel), x, y, x1 * 2, y1, w2, h / 2, c, s);
-            if(PIX_RIGHT_MASK(pixel) > 0)
-              drawRotateSprPixel(GET_PIX_RIGHT(pixel), x, y, x1 * 2 + 1, y1, w2, h / 2, c, s);
-          }
-      }
+void drawActor(int8_t i) {  
+  int n = i+1;
+  if (i == -1) {
+    i = 0;
+    n = 32;
   }
+  for(; i < n; i++)
+    if (actor_table[i].lives > 0)     
+      drawSprite(actor_table[i].sprite+actor_table[i].frame, actor_table[i].x, actor_table[i].y, actor_table[i].width, actor_table[i].height);
 }
-*/
-void drawActor(int8_t n, uint16_t x, uint16_t y){
-  uint16_t adr = actor_table[n].address;
-  uint8_t w = actor_table[n].width;
-  uint8_t h = actor_table[n].height;
-  int16_t c = getCos(actor_table[n].angle);
-  int16_t s = getSin(actor_table[n].angle);
-  uint8_t pixel;
-  w = w / 2;
-  if(actor_table[n].angle == 0){
-    for(byte y1 = 0; y1 < h; y1 ++)
-      if(y1 + y >= -h && y1 + y < 128 + h){
-        for(byte x1 = 0; x1 < w; x1++){
-          pixel = readMem(adr + x1 + y1 * w);
-          if(PIX_LEFT_MASK(pixel) > 0)
-            drawSprPixel(GET_PIX_LEFT(pixel), x, y, x1 * 2, y1);
-          if(PIX_RIGHT_MASK(pixel) > 0)
-            drawSprPixel(GET_PIX_RIGHT(pixel), x, y, x1 * 2 + 1, y1);
-        }
-      }
-  }
-  else{
-    for(byte y1 = 0; y1 < h; y1 ++)
-      if(y1 + y >= -h && y1 + y < 128 + h){
-        for(byte x1 = 0; x1 < w; x1++)
-          if(x1 + x >= -w && x1 + x < 128 + w){
-            pixel = readMem(adr + x1 + y1 * w);
-            if(PIX_LEFT_MASK(pixel) > 0)
-              drawRotateSprPixel(GET_PIX_LEFT(pixel), x, y, x1 * 2, y1, w, h / 2, c, s);
-            if(PIX_RIGHT_MASK(pixel) > 0)
-              drawRotateSprPixel(GET_PIX_RIGHT(pixel), x, y, x1 * 2 + 1, y1, w, h / 2, c, s);
-          }   
-      }
-  }
-}
+
+#define IS_TRANSPARENT(col) (espico.palt & (1 << col))
 
 void drawImg(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h){
-  if(espico.imageSize > 1){
-    drawImgS(a, x, y, w, h);
-    return;
+  int add_next_row = 0;
+  if (a >= SPRITE_MEMMAP) {
+    add_next_row = 64 - (w >> 1);
   }
+  if(espico.imageSize > 1){
+    drawImgS(a, x, y, w, h, add_next_row);
+  } else {
   uint8_t p, color;
-  for(int16_t yi = 0; yi < h; yi++)
+  for(int16_t yi = 0; yi < h; yi++) {
     for(int16_t xi = 0; xi < w; xi++){
       p = readMem(a);
       color = GET_PIX_LEFT(p);
-      if(color > 0){
-        setPix(xi + x, yi + y, color);
+      if(!IS_TRANSPARENT(color)){
+        setPix(xi + x, yi + y, drwpalette[color]);
       }
       xi++;
       color = GET_PIX_RIGHT(p);
-      if(color > 0){
-        setPix(xi + x, yi + y, color);
+      if(!IS_TRANSPARENT(color)){
+        setPix(xi + x, yi + y, drwpalette[color]);
       }
       a++;
     }
-}
-
-void drawImgRLE(int16_t adr, int16_t x1, int16_t y1, int16_t w, int16_t h){
-    if(espico.imageSize > 1){
-      drawImgRLES(adr, x1, y1, w, h);
-      return;
-    }
-    int16_t i = 0;
-    byte repeat = readMem(adr);
-    adr++;
-    int8_t color1 = GET_PIX_LEFT(readMem(adr));
-    int8_t color2 = GET_PIX_RIGHT(readMem(adr));
-    while(i < w * h){
-      if(repeat > 0x81){
-        if(color1 > 0){
-          setPix(x1 + i % w, y1 + i / w, color1);
-        }
-        if(color2 > 0){
-          setPix(x1 + i % w + 1, y1 + i / w, color2);
-        }
-        i += 2;
-        adr++;
-        repeat--;
-        color1 = GET_PIX_LEFT(readMem(adr));
-        color2 = GET_PIX_RIGHT(readMem(adr));
-      }
-      else if(repeat == 0x81){
-        repeat = readMem(adr);
-        adr++;
-        color1 = GET_PIX_LEFT(readMem(adr));
-        color2 = GET_PIX_RIGHT(readMem(adr));
-      }
-      else if(repeat > 0){
-        if(color1 > 0){
-          setPix(x1 + i % w, y1 + i / w, color1);
-        }
-        if(color2 > 0){
-          setPix(x1 + i % w + 1, y1 + i / w, color2);
-        }
-        i += 2;
-        repeat--;
-      }
-      else if(repeat == 0){
-        adr++;
-        repeat = readMem(adr);
-        adr++;
-        color1 = GET_PIX_LEFT(readMem(adr));
-        color2 = GET_PIX_RIGHT(readMem(adr));
-      }
-    }
+    a += add_next_row;
   }
+  }
+}
 
 void drawImageBit(int16_t adr, int16_t x1, int16_t y1, int16_t w, int16_t h){
   if(espico.imageSize > 1){
     drawImageBitS(adr, x1, y1, w, h);
     return;
   }
-  int16_t size = w * h / 8;
   int16_t i = 0;
   uint8_t ibit;
+  const int8_t fgcolor = (IS_TRANSPARENT(espico.color)) ? -1 : drwpalette[espico.color];
+  const int8_t bgcolor = drwpalette[espico.bgcolor];
+  // const int8_t bgcolor = (IS_TRANSPARENT(espico.bgcolor)) ? -1 : drwpalette[espico.bgcolor];
   for(int16_t y = 0; y < h; y++)
     for(int16_t x = 0; x < w; x++){
       if(i % 8 == 0){
         ibit = readMem(adr);
         adr++;
       }
-      if(ibit & 0x80)
-        setPix(x1 + x, y1 + y, espico.color);
-      else
-        setPix(x1 + x, y1 + y, espico.bgcolor);
+      if (ibit & 0x80) {
+        if (fgcolor >= 0)
+          setPix(x1 + x, y1 + y, fgcolor);
+      } else if (bgcolor >= 0) {
+        setPix(x1 + x, y1 + y, bgcolor);
+      }
       ibit = ibit << 1;
       i++;
     }
 }
 
-void drawImgS(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h){
-  uint8_t p, jx, jy, color, s;
-  s = espico.imageSize;
-  for(int16_t yi = 0; yi < h; yi++)
-    for(int16_t xi = 0; xi < w; xi++){
+void drawImgS(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_next_row){
+  uint8_t p, color;
+  const uint8_t s = espico.imageSize;
+  const int16_t ws = w * s;
+  const int16_t w1 = (w & 1);
+  const int16_t hs = h * s;
+  for(int16_t yi = 0; yi < hs; yi += s) {
+    for(int16_t xi = 0; xi < ws; xi += s){
       p = readMem(a);
       color = GET_PIX_LEFT(p);
-      if(color > 0){
-        for(jx = 0; jx < s; jx++)
-              for(jy = 0; jy < s; jy++)
-                setPix(xi * s + x + jx, yi * s + y + jy, color);
+      if(!IS_TRANSPARENT(color)){
+        for(int jy = 0; jy < s; jy++)
+          for(int jx = 0; jx < s; jx++)
+            setPix(x + xi + jx, y + yi + jy, drwpalette[color]);
       }
-      xi++;
+      xi += s;
       color = GET_PIX_RIGHT(p);
-      if(color > 0){
-        for(jx = 0; jx < s; jx++)
-              for(jy = 0; jy < s; jy++)
-                setPix(xi * s + x + jx, yi * s + y + jy, color);
+      if(!IS_TRANSPARENT(color)){
+        for(int jy = 0; jy < s; jy++)
+          for(int jx = 0; jx < s; jx++)
+            setPix(x + xi + jx, y + yi + jy, drwpalette[color]);
       }
       a++;
     }
-}
-
-void drawImgRLES(int16_t adr, int16_t x1, int16_t y1, int16_t w, int16_t h){
-    int16_t i = 0;
-    uint8_t jx, jy;
-    byte repeat = readMem(adr);
-    adr++;
-    int8_t color1 = GET_PIX_LEFT(readMem(adr));
-    int8_t color2 = GET_PIX_RIGHT(readMem(adr));
-    while(i < w * h){
-      if(repeat > 0x81){
-        if(color1 > 0){
-          for(jx = 0; jx < espico.imageSize; jx++)
-            for(jy = 0; jy < espico.imageSize; jy++)
-              setPix(x1 + (i % w) * espico.imageSize + jx, y1 + i / w * espico.imageSize + jy, color1);
-        }
-        if(color2 > 0){
-          for(jx = 0; jx < espico.imageSize; jx++)
-            for(jy = 0; jy < espico.imageSize; jy++)
-              setPix(x1 + (i % w) * espico.imageSize + espico.imageSize + jx, y1 + i / w * espico.imageSize + jy, color2);
-        }
-        i += 2;
-        adr++;
-        repeat--;
-        color1 = GET_PIX_LEFT(readMem(adr));
-        color2 = GET_PIX_RIGHT(readMem(adr));
-      }
-      else if(repeat == 0x81){
-        repeat = readMem(adr);
-        adr++;
-        color1 = GET_PIX_LEFT(readMem(adr));
-        color2 = GET_PIX_RIGHT(readMem(adr));
-      }
-      else if(repeat > 0){
-        if(color1 > 0){
-          for(jx = 0; jx < espico.imageSize; jx++)
-                for(jy = 0; jy < espico.imageSize; jy++)
-                  setPix(x1 + (i % w) * espico.imageSize + jx, y1 + i / w * espico.imageSize + jy, color1);
-        }
-        if(color2 > 0){
-          for(jx = 0; jx < espico.imageSize; jx++)
-                for(jy = 0; jy < espico.imageSize; jy++)
-                  setPix(x1 + (i % w) * espico.imageSize + espico.imageSize + jx, y1 + i / w * espico.imageSize + jy, color2);
-        }
-        i += 2;
-        repeat--;
-      }
-      else if(repeat == 0){
-        adr++;
-        repeat = readMem(adr);
-        adr++;
-        color1 = GET_PIX_LEFT(readMem(adr));
-        color2 = GET_PIX_RIGHT(readMem(adr));
-      }
-    }
+    a += add_next_row;
   }
+}
 
 void drawImageBitS(int16_t adr, int16_t x1, int16_t y1, int16_t w, int16_t h){
   int16_t size = w * h / 8;
   int16_t i = 0;
   uint8_t ibit, jx, jy;
-  for(int16_t y = 0; y < h; y++)
-    for(int16_t x = 0; x < w; x++){
+  const uint8_t s = espico.imageSize;
+  const int16_t ws = w * s;
+  const int16_t hs = h * s; 
+  const int8_t fgcolor = (IS_TRANSPARENT(espico.color)) ? -1 : drwpalette[espico.color];
+  const int8_t bgcolor = drwpalette[espico.bgcolor];
+  // const int8_t bgcolor = (IS_TRANSPARENT(espico.bgcolor)) ? -1 : drwpalette[espico.bgcolor];
+  for(int16_t y = 0; y < hs; y += s)
+    for(int16_t x = 0; x < ws; x += s){
       if(i % 8 == 0){
         ibit = readMem(adr);
         adr++;
       }
-      if(ibit & 0x80){
-        for(jx = 0; jx < espico.imageSize; jx++)
-          for(jy = 0; jy < espico.imageSize; jy++)
-          setPix(x1 + x * espico.imageSize + jx, y1 + y * espico.imageSize + jy, espico.color);
+      if (ibit & 0x80) {
+        if (fgcolor >= 0) 
+          for(int jy = 0; jy < s; jy++)
+            for(int jx = 0; jx < s; jx++)
+              setPix(x1 + x + jx, y1 + y + jy, fgcolor);
       } 
-      else{
-        for(jx = 0; jx < espico.imageSize; jx++)
-          for(jy = 0; jy < espico.imageSize; jy++)
-            setPix(x1 + x * espico.imageSize + jx, y1 + y * espico.imageSize + jy, espico.bgcolor);
+      else if (bgcolor >= 0) {
+        for(int jy = 0; jy < s; jy++)
+          for(int jx = 0; jx < s; jx++)
+            setPix(x1 + x + jx, y1 + y + jy, bgcolor);
       } 
       ibit = ibit << 1;
       i++;
     }
 }
 
-void loadTileMap(int16_t adr, uint8_t iwidth, uint8_t iheight, uint8_t width, uint8_t height){
-    tiles.adr = adr;
-    tiles.imgwidth = iwidth;
-    tiles.imgheight = iheight;
-    tiles.width = width;
-    tiles.height = height;
-  }
-
-/*
-void drawTileMap(int16_t x0, int16_t y0, int16_t celx, int16_t cely, int16_t celw, int16_t celh, uint8_t layer = 0xff){
+void drawTileMap(int16_t x0, int16_t y0, int16_t celx, int16_t cely, int16_t celw, int16_t celh, uint8_t layer){
     int16_t x, y, nx, ny;
     uint8_t spr;
     for(x = 0; x < celw; x++){
       nx = x0 + x * 8;
       for(y = 0; y < celh; y++){
-        spr = tile_map[TILEMAP_ADDR(celx+x, cely+y)];
+        spr = getTile(celx+x, cely+y);
         ny = y0 + y * 8;
-        if (spr > 0) drawSprite(spr, nx, ny);
+        if (spr > 0 && ((sprite_flags[spr] & layer) == layer)) drawSprite(spr, nx, ny, 8, 8);
       }
     }
 }
-
+/*
 void testTileMap() {
   drawTileMap(0,8,0,0,16,16);
 }
 */
 
-void drawTiles(int16_t x0, int16_t y0){
-    int16_t x, y, nx, ny;
-    uint16_t imgadr;
-    tiles.x = x0;
-    tiles.y = y0;
-    for(x = 0; x < tiles.width; x++){
-      nx = x0 + x * tiles.imgwidth;
-      for(y = 0; y < tiles.height; y++){
-        ny = y0 + y * tiles.imgheight;
-        if(nx >= -tiles.width && nx < 128 && ny >= -tiles.height && ny < 128){
-          imgadr = readInt(tiles.adr + (x + y * tiles.width) * 2);
-          if(imgadr > 0)
-            drawImg(imgadr, nx, ny, tiles.imgwidth, tiles.imgheight); 
-        }
-      }
-    }
-  }
-
-void drawFVLine(int16_t x, int16_t y1, int16_t y2){
+inline void drawFVLine(int16_t x, int16_t y1, int16_t y2, uint8_t color){
   for(int16_t  i = y1; i <= y2; i++)
-    setPix(x, i, espico.color);
+    setPix(x, i, color);
 }
 
-void drawFHLine(int16_t x1, int16_t x2, int16_t y){
+inline void drawFHLine(int16_t x1, int16_t x2, int16_t y, uint8_t color){
   for(int16_t  i = x1; i <= x2; i++)
-    setPix(i, y, espico.color);
+    setPix(i, y, color);
 }
 
 void drwLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+  const uint8_t fgcolor = drwpalette[espico.color];
     if(x1 == x2){
       if(y1 > y2)
-        drawFVLine(x1, y2, y1);
+        drawFVLine(x1, y2, y1, fgcolor);
       else
-        drawFVLine(x1, y1, y2);
+        drawFVLine(x1, y1, y2, fgcolor);
       return;
     }
     else if(y1 == y2){
       if(x1 > x2)
-        drawFHLine(x2, x1, y1);
+        drawFHLine(x2, x1, y1, fgcolor);
       else
-        drawFHLine(x1, x2, y1);
+        drawFHLine(x1, x2, y1, fgcolor);
       return;
     }
     int16_t deltaX = abs(x2 - x1);
@@ -1111,9 +961,9 @@ void drwLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
     int16_t signY = y1 < y2 ? 1 : -1;
     int16_t error = deltaX - deltaY;
     int16_t error2;
-    setPix(x2, y2, espico.color);
+    setPix(x2, y2, fgcolor);
     while(x1 != x2 || y1 != y2){
-      setPix(x1, y1, espico.color);
+      setPix(x1, y1, fgcolor);
       error2 = error * 2;
       if(error2 > -deltaY){
         error -= deltaY;
@@ -1139,7 +989,7 @@ inline void setPix(uint16_t x, uint16_t y, uint8_t c){
       line_is_draw[y] |= 1 + x / 64;
   }
 }
-
+/*
 inline void setPix2(int16_t xi, int16_t y, uint8_t c){
   if(xi < 64 && y < 128){
     if (screen[SCREEN_ADDR(xi, y)] != c) {
@@ -1148,7 +998,7 @@ inline void setPix2(int16_t xi, int16_t y, uint8_t c){
     }
   }
 }
-
+*/
 byte getPix(byte x, byte y){
   byte b = 0;
   int16_t xi = x / 2;
@@ -1162,8 +1012,12 @@ byte getPix(byte x, byte y){
 }
 
 void changePalette(uint8_t n, uint16_t c){
+  c &= 0xf;
   if(n < 16){
-    palette[n] = c;
+    drwpalette[n] = c&0xf;
+  } else if (n < 32) {
+    n = n - 16;
+    palette[n] = (uint16_t)pgm_read_word_near(epalette + c);
     for(uint8_t y = 0; y < 128; y++){
       for(uint8_t x = 0; x < 64; x++){
         if((GET_PIX_LEFT(screen[SCREEN_ADDR(x, y)]) == n || GET_PIX_RIGHT(screen[SCREEN_ADDR(x, y)]) == n))
@@ -1171,6 +1025,10 @@ void changePalette(uint8_t n, uint16_t c){
       }
     }
   }
+}
+
+void setPalT(uint16_t palt) {
+  espico.palt = palt;
 }
 
 void scrollScreen(uint8_t step, uint8_t direction){
@@ -1239,100 +1097,7 @@ void scrollScreen(uint8_t step, uint8_t direction){
         if(actor_table[n].flags & 2)
           actor_table[n].y++;
     }
-    if(tiles.adr > 0)
-      tileMapDrawLine(step, direction);
 }
-
-void tileMapDrawLine(uint8_t step, uint8_t direction){
-    int16_t x,y,x0,y0,y1,nx,ny;
-    uint16_t imgadr;
-    if(direction == 2){
-      tiles.x -= step*2;
-      x0 = tiles.x;
-      y0 = tiles.y;
-      x = (127 - x0) / tiles.imgwidth;
-      nx = x0 + x * tiles.imgwidth;
-      if(x < tiles.width && x >= -tiles.width){
-        for(y = 0; y < tiles.height; y++){
-          ny = y0 + y * tiles.imgheight;
-          if(ny > -tiles.height && ny < 128){
-            imgadr = readInt(tiles.adr + (x + y * tiles.width) * 2);
-            if(imgadr > 0)
-              drawImg(imgadr, nx, ny, tiles.imgwidth, tiles.imgheight); 
-            else
-              fillRect(nx, ny, tiles.imgwidth, tiles.imgheight, espico.bgcolor);
-          }
-        }
-      }
-      else if(tiles.width * tiles.imgwidth + x0 >= 0){
-        y0 = (y0 > 0) ? y0 : 0;
-        y1 = (tiles.y + tiles.height * tiles.imgheight < 128) ? tiles.y + tiles.height * tiles.imgheight - y0 : 127 - y0;
-        if(y0 < 127 && y1 > 0)
-          fillRect(127 - step * 2, y0, step * 2, y1, espico.bgcolor);
-      }
-    }
-    else if(direction == 1){
-      tiles.y -= step;
-      x0 = tiles.x;
-      y0 = tiles.y;
-      y = (127 - y0) / tiles.imgheight;
-      ny = y0 + y * tiles.imgheight;
-      if(y < tiles.height  && y >= -tiles.height)
-        for(x = 0; x < tiles.width; x++){
-          nx = x0 + x * tiles.imgwidth;
-          if(nx > -tiles.width && nx < 128){
-            imgadr = readInt(tiles.adr + (x + y * tiles.width) * 2);
-            if(imgadr > 0)
-              drawImg(imgadr, nx, ny, tiles.imgwidth, tiles.imgheight); 
-            else
-              fillRect(nx, ny, tiles.imgwidth, tiles.imgheight, espico.bgcolor);
-          }
-        }
-    }
-    else if(direction == 0){
-      tiles.x += step*2;
-      x0 = tiles.x;
-      y0 = tiles.y;
-      x = (0 - x0) / tiles.imgwidth;
-      nx = x0 + x * tiles.imgwidth;
-      if(x0 < 0 && x >= -tiles.width){
-        for(y = 0; y < tiles.height; y++){
-          ny = y0 + y * tiles.imgheight;
-          if(ny > -tiles.height && ny < 128){
-            imgadr = readInt(tiles.adr + (x + y * tiles.width) * 2);
-            if(imgadr > 0)
-              drawImg(imgadr, nx, ny, tiles.imgwidth, tiles.imgheight); 
-            else
-              fillRect(nx, ny, tiles.imgwidth, tiles.imgheight, espico.bgcolor);
-          }
-        }
-      }
-      else if(x0 < 128){
-        y0 = (y0 > 0) ? y0 : 0;
-        y1 = (tiles.y + tiles.height * tiles.imgheight < 128) ? tiles.y + tiles.height * tiles.imgheight - y0 : 127 - y0;
-        if(y0 < 127 && y1 > 0)
-          fillRect(0, y0, step * 2, y1, espico.bgcolor);
-      }
-    }
-    else if(direction == 3){
-      tiles.y += step;
-      x0 = tiles.x;
-      y0 = tiles.y;
-      y = (0 - y0) / tiles.imgheight;
-      ny = y0 + y * tiles.imgheight;
-      if(y0 < 0  && y >= -tiles.height)
-        for(x = 0; x < tiles.width; x++){
-          nx = x0 + x * tiles.imgwidth;
-          if(nx > -tiles.width && nx < 128){
-            imgadr = readInt(tiles.adr + (x + y * tiles.width) * 2);
-            if(imgadr > 0)
-              drawImg(imgadr, nx, ny, tiles.imgwidth, tiles.imgheight); 
-            else
-              fillRect(nx, ny, tiles.imgwidth, tiles.imgheight, espico.bgcolor);
-          }
-        }
-    }
-  }
 
 void charLineUp(byte n){
   clearScr(espico.bgcolor);
@@ -1352,7 +1117,7 @@ inline void setCharY(int8_t y){
 
 void printc(char c, byte fc, byte bc){
   if(c == '\n'){
-    fillRect(espico.regx * 6, espico.regy * 8, 127 - espico.regx * 6, 8, espico.bgcolor);
+    fillRect(espico.regx * 6, espico.regy * 8, 127, espico.regy * 8 + 7);
     for(byte i = espico.regx; i <= 21; i++){
       charArray[espico.regx + espico.regy * 21] = ' ';
     }
@@ -1365,7 +1130,7 @@ void printc(char c, byte fc, byte bc){
   }
   else if(c == '\t'){
     for(byte i = 0; i <= espico.regx % 5; i++){
-      fillRect(espico.regx * 6, espico.regy * 8, 6, 8, espico.bgcolor);
+      fillRect(espico.regx * 6, espico.regy * 8, espico.regx * 6 + 5, espico.regy * 8 + 7);
       charArray[espico.regx + espico.regy * 21] = ' ';
       espico.regx++;
       if(espico.regx > 21){
@@ -1379,7 +1144,7 @@ void printc(char c, byte fc, byte bc){
     }
   }
   else{
-    fillRect(espico.regx * 6, espico.regy * 8, 6, 8, espico.bgcolor);
+    fillRect(espico.regx * 6, espico.regy * 8, espico.regx * 6 + 5, espico.regy * 8 + 7);
     putchar(c, espico.regx * 6, espico.regy * 8);
     charArray[espico.regx + espico.regy * 21] = c;
     espico.regx++;
@@ -1398,10 +1163,89 @@ inline void setColor(uint8_t c){
   espico.color = c & 0xf;
 }
 
-void fillRect(int8_t x, int8_t y, uint8_t w, uint8_t h, uint8_t c){
-   for(int16_t jx = x; jx < x + w; jx++)
-     for(int16_t jy = y; jy < y + h; jy++)
-      setPix(jx, jy, c);
+void drawRect(int8_t x0, int8_t y0, int8_t x1, uint8_t y1){
+  const uint8_t fgcolor = drwpalette[espico.color];
+  drawFHLine(x0, x1, y0, fgcolor);
+  drawFHLine(x0, x1, y1, fgcolor);
+  drawFVLine(x0, y0, y1, fgcolor);
+  drawFVLine(x1, y1, y1, fgcolor);
+}
+
+void fillRect(int8_t x0, int8_t y0, int8_t x1, uint8_t y1){
+  const uint8_t bgcolor = drwpalette[espico.bgcolor];
+  for(int16_t jy = y0; jy <= y1; jy++)
+    drawFHLine(x0, x1, jy, bgcolor);
+}
+
+void drawCirc(int16_t x0, int16_t y0, int16_t r) {
+  const uint8_t fgcolor = drwpalette[espico.color];
+  int16_t  x  = 0;
+  int16_t  dx = 1;
+  int16_t  dy = r+r;
+  int16_t  p  = -(r>>1);
+
+  // These are ordered to minimise coordinate changes in x or y
+  // drawPixel can then send fewer bounding box commands
+  setPix(x0 + r, y0, fgcolor);
+  setPix(x0 - r, y0, fgcolor);
+  setPix(x0, y0 - r, fgcolor);
+  setPix(x0, y0 + r, fgcolor);
+
+  while(x<r){
+
+    if(p>=0) {
+      dy-=2;
+      p-=dy;
+      r--;
+    }
+
+    dx+=2;
+    p+=dx;
+
+    x++;
+
+    // These are ordered to minimise coordinate changes in x or y
+    // drawPixel can then send fewer bounding box commands
+    setPix(x0 + x, y0 + r, fgcolor);
+    setPix(x0 - x, y0 + r, fgcolor);
+    setPix(x0 - x, y0 - r, fgcolor);
+    setPix(x0 + x, y0 - r, fgcolor);
+
+    setPix(x0 + r, y0 + x, fgcolor);
+    setPix(x0 - r, y0 + x, fgcolor);
+    setPix(x0 - r, y0 - x, fgcolor);
+    setPix(x0 + r, y0 - x, fgcolor);
+  }
+}
+
+void fillCirc(int16_t x0, int16_t y0, int16_t r) {
+  const uint8_t bgcolor = drwpalette[espico.bgcolor];
+  int16_t  x  = 0;
+  int16_t  dx = 1;
+  int16_t  dy = r+r;
+  int16_t  p  = -(r>>1);
+
+  drawFHLine(x0 - r, y0, x0 + r, bgcolor);
+
+  while(x<r){
+
+    if(p>=0) {
+      dy-=2;
+      p-=dy;
+      r--;
+    }
+
+    dx+=2;
+    p+=dx;
+
+    x++;
+
+    drawFHLine(x0 - r, y0 + x, x0 + r, bgcolor);
+    drawFHLine(x0 - r, y0 - x, x0 + r, bgcolor);
+    drawFHLine(x0 - x, y0 + r, x0 + x, bgcolor);
+    drawFHLine(x0 - x, y0 - r, x0 + x, bgcolor);
+
+  }
 }
 
 void putString(char s[], int8_t y){
@@ -1413,11 +1257,12 @@ void putString(char s[], int8_t y){
 }
 
 void putchar(char c, uint8_t x, uint8_t y) {
+  const uint8_t fgcolor = drwpalette[espico.color];
     for(int8_t i=0; i<5; i++ ) { // Char bitmap = 5 columns
       uint8_t line = pgm_read_byte(&font_a[c * 5 + i]);
       for(int8_t j=0; j<8; j++, line >>= 1) {
         if(line & 1)
-         setPix(x+i, y+j, espico.color);
+         setPix(x+i, y+j, fgcolor);
       }
   }
 }

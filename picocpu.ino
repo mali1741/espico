@@ -93,7 +93,7 @@ void cpuInit(){
   carry = 0;
   zero = 0;
   negative = 0;
-  tft.setTextColor(palette[espico.color]);
+  // tft.setTextColor(palette[espico.color]);
 }
 
 void debug(){
@@ -141,30 +141,11 @@ inline int16_t readInt(uint16_t adr){
 
 inline void writeMem(uint16_t adr, int16_t n){
   if(adr < RAM_SIZE) mem[adr] = n;
-/*  else {
-    switch (adr & 0xE000) {
-      case SPRITE_MEMMAP:  // access sprite screen
-        sprite_map[adr & 0x1fff] = n;
-        break;
-      case SCREEN_MEMMAP:  // access screen
-        ((uint8_t*)(&screen))[adr & 0x1fff] = n;
-        break;
-    }
-  } */ 
 }
 
 inline byte readMem(uint16_t adr){
-  if (adr < RAM_SIZE) return mem[adr];
-/*  else {
-    switch (adr & 0xE000) {
-      case SPRITE_MEMMAP:  // access sprite screen
-        return sprite_map[adr & 0x1fff];
-      case SCREEN_MEMMAP:  // access screen
-        return ((uint8_t*)(&screen))[adr & 0x1fff];
-      default:
-        return 0;
-    }
-  } */
+  if(adr < RAM_SIZE) return mem[adr];
+//  return (adr < RAM_SIZE) ? mem[adr] : 0;
 }
 
 inline void setRedraw(){
@@ -695,6 +676,16 @@ void cpuStep(){
             n = setFlags(n);
             reg[reg1] = n;
           }
+          else if(reg2 == 0x20){
+            n = getCos(reg[reg1]);
+            n = setFlags(n);
+            reg[reg1] = n;
+          }
+          else if(reg2 == 0x30){
+            n = getSin(reg[reg1]);
+            n = setFlags(n);
+            reg[reg1] = n;
+          }
           break;
         case 0xAE:
           // ANDL R,R   AE RR
@@ -773,7 +764,27 @@ void cpuStep(){
       switch(op1){ 
         case 0xD0:
           //CLS   D000
-          clearScr(espico.bgcolor);
+          if (op2 == 0x00) {
+            clearScr(espico.bgcolor);
+          } else if ((op2 & 0xf0) == 0x10) {
+            reg1 = (op2 & 0xf);
+            adr = reg[reg1];
+            // drawRect();
+            drawRect(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+          } else if ((op2 & 0xf0) == 0x20) {
+            reg1 = (op2 & 0xf);
+            adr = reg[reg1];
+            fillRect(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+          } else if ((op2 & 0xf0) == 0x10) {
+            reg1 = (op2 & 0xf);
+            adr = reg[reg1];
+            // drawCirc();
+            drawCirc(readInt(adr + 4), readInt(adr + 2), readInt(adr));
+          } else if ((op2 & 0xf0) == 0x10) {
+            reg1 = (op2 & 0xf);
+            adr = reg[reg1];
+            fillCirc(readInt(adr + 4), readInt(adr + 2), readInt(adr));
+          }
           break;
         case 0xD1:
           switch(op2 & 0xf0){
@@ -876,17 +887,17 @@ void cpuStep(){
                 adr = reg[reg1];//the register contains the address of the values located sequentially y1, x1, y, x
                 drwLine(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
-              case 0x070:
-                // // DRWRLE R   D47R
+              case 0x70:
+                // // DRSPR R   D47R
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];//the register contains the address of the values located sequentially h, w, y, x, аdr
-                drawImgRLE(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+                drawSprite(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0x80:
                 // LDTILE R   D4 8R
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];////the register contains the address of the values located sequentially height, width, iheight, iwidth, adr
-                loadTileMap(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+                setTile(readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0x90:
                 // SPRSDS R*2 D4 9R
@@ -895,67 +906,81 @@ void cpuStep(){
                 actorSetDirectionAndSpeed(readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0xA0:
-                // DRW1BIT R D4AR
+                // DRW1BIT R  D4 AR
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];//the register contains the address of the values located sequentially h, w, y, x, аdr
                 drawImageBit(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0xB0:
-                // DRTILEM R   D4 AR
+                // DRTILEM R   D4 BR
                 reg1 = op2 & 0xf;
                 adr = reg[reg1]; // stack adr, for layer, celh, celw, y0, x0, cely, celx 
-                // drawTileMap(readInt(adr +12), readInt(adr + 10), readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+                drawTileMap(readInt(adr +12), readInt(adr + 10), readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
              case 0xC0:
-                // UNUSED R    D4 CR
+                // MVACT R    D4 CR
                 reg1 = op2 & 0xf;
-                adr = reg[reg1];
+                moveActor(reg[reg1]);
                 break;
               case 0xD0:
-                // UNUSED R     D4 DR
+                // DRACT R    D4 DR
                 reg1 = op2 & 0xf;
-                adr = reg[reg1];
+                drawActor(reg[reg1]);
                 break;
               case 0xE0:
-                // UNUSED R     D4 ER
+                // TACTC R    D4 ER
                 reg1 = op2 & 0xf;
-                adr = reg[reg1];
+                testActorCollision();
                 break;
               case 0xF0:
-                // UNUSED R     D4 FR
+                // TACTM R    D4 FR
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];
+                testActorMap(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
             }
             break;
         case 0xD5:
           // LDSPRT R,R   D5RR
-          reg1 = (op2 & 0xf0) >> 4;//номер спрайта
-          reg2 = op2 & 0xf;//адрес спрайта
+          reg1 = (op2 & 0xf0) >> 4;//actor 
+          reg2 = op2 & 0xf;//sprite number
           setActorSprite(reg[reg1] & 0x1f, reg[reg2]);
           break;
         case 0xD6:
           // SPALET R,R   D6 RR
-          reg1 = (op2 & 0xf0) >> 4;//номер спрайта
-          reg2 = op2 & 0xf;//width
-          changePalette(reg[reg1] & 15, reg[reg2]);
+          if (op2 == 0x00) {
+            resetPalette(); 
+          } else {
+            reg1 = (op2 & 0xf0) >> 4;//palette color
+            reg2 = op2 & 0xf; // color
+            changePalette(reg[reg1] & 15, reg[reg2]);
+          }
           break;
         case 0xD7:
             reg1 = op2 & 0xf;
             adr = reg[reg1];
-            // SPART R     D7 0R
-            if((op2 & 0xf0) == 0x0)
-              //the register contains the address of the values located sequentially  count, time, gravity
+            switch (op2 & 0xf0) {
+              case 0x00:
+              // SPART R     D7 0R
+              // the register contains the address of the values located sequentially  count, time, gravity
               setParticle(readInt(adr + 4), readInt(adr + 2), readInt(adr));
-            else if((op2 & 0xf0) == 0x10)
-              //the register contains the address of the values located sequentially  speed, direction2, direction1, time
+              break;
+              case 0x10:
+              // the register contains the address of the values located sequentially  speed, direction2, direction1, time
               setEmitter(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
-            else if((op2 & 0xf0) == 0x20)
-              //the register contains the address of the values located sequentially  color, y, x
+              break;
+              case 0x20:
+              // the register contains the address of the values located sequentially  color, y, x
               drawParticle(readInt(adr + 4), readInt(adr + 2), readInt(adr) & 0xf);
-            else if((op2 & 0xf0) == 0x50)
-              //the register contains the address of the values located sequentially  y2,x2,y1,x1
+              break;
+              case 0x50:
+              // the register contains the address of the values located sequentially  y2,x2,y1,x1
               reg[1] = distancepp(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+              break;
+              case 0x60:
+              redrawParticles();
+              break;
+            }
             break;
         case 0xD8:
           // SCROLL R,R   D8RR
@@ -971,9 +996,10 @@ void cpuStep(){
           break;
         case 0xDA:
           // DRTILE R   DA RR
-          reg1 = (op2 & 0xf0) >> 4;//x
-          reg2 = op2 & 0xf;//y
-          drawTiles(reg[reg1], reg[reg2]);
+          reg1 = (op2 & 0xf0) >> 4;//y
+          reg2 = op2 & 0xf;//x
+          reg[reg1] = atan2_rb(reg[reg1], reg[reg2]);
+          // drawTiles(reg[reg1], reg[reg2]);
           break;
         case 0xDB:
           // GSPRXY R,R   D8 RR
@@ -997,7 +1023,7 @@ void cpuStep(){
           // GTILEXY R,R      DF RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
-          reg[reg1] = getTileInXY(reg[reg1], reg[reg2]);
+          reg[reg1] = getTile(reg[reg1], reg[reg2]);
           break;
       }
       break;

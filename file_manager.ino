@@ -18,7 +18,7 @@ void fileList(String path) {
     skip = startpos;
     lst = 1;
     dir = SPIFFS.openDir(path);
-    setColor(1);
+    setColor(7);
     while (dir.next() && lst < 14) {
       File entry = dir.openFile("r");
       if(skip > 0){
@@ -42,7 +42,7 @@ void fileList(String path) {
     else if(startpos > pos){
       startpos = pos;
     }
-    setColor(8);
+    setColor(6);
     drwLine(2, (pos - startpos + 1) * 8, 124,  (pos - startpos + 1) * 8);
     drwLine(2, (pos - startpos + 1) * 8 + 7, 124,  (pos - startpos + 1) * 8 + 7);
     redrawScreen();
