@@ -7,6 +7,7 @@ int16_t reg[16] __attribute__ ((aligned));
 int16_t shadow_reg[16] __attribute__ ((aligned));
 uint16_t pc = 0;
 uint16_t interrupt = 0;
+int32_t n = 0;
 byte carry = 0;
 byte zero = 0;
 byte negative = 0;
@@ -198,7 +199,6 @@ void cpuStep(){
   byte reg3 = 0;
   uint16_t adr;
   uint16_t j;
-  uint32_t n = 0;
   //if(isDebug)
   //  debug();
   switch(op1 >> 4){
@@ -369,10 +369,10 @@ void cpuStep(){
           setFlags(reg[reg1]);
           break;
         case 0x55:
-          // EPSTAT R,R   55RR
+          // EPSTAT R   55XR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
-          setEspicoState(reg[reg1],reg[reg2]);
+          setEspicoState(reg1,reg[reg2]);
           break;
       }
       break;
@@ -526,40 +526,35 @@ void cpuStep(){
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = reg[reg1] + reg[reg2];
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xA1:
           // ADC R,R    A1 RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = reg[reg1] + reg[reg2] + carry;
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xA2:
           // SUB R,R    A2 RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = reg[reg1] - reg[reg2];
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xA3:
           // SBC R,R    A3 RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = reg[reg1] - reg[reg2] - carry;
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xA4:
           // MUL R,R    A4 RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
-          n = reg[reg1] * reg[reg2];
-          n = setFlags(n);
-          reg[reg1] = n;
+          n = (int32_t)reg[reg1] * (int32_t)reg[reg2];
+          reg[reg1] = setFlags(n);
           break;
         case 0xA5:
           // DIV R,R    A5 RR
@@ -569,32 +564,29 @@ void cpuStep(){
             n = reg[reg1] / reg[reg2];
           else
             n = 0;//error
-          n = setFlags(n);
           reg[reg2] = reg[reg1] % reg[reg2];
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xA6:
           // AND R,R    A6 RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = reg[reg1] & reg[reg2];
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xA7:
           // OR R,R   A7 RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = reg[reg1] | reg[reg2];
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xA8:
           if(op2 == 0x10){
             // INC adr    A8 10 XXXX
             reg1 = op2 & 0xf;
             n = readInt(readInt(pc)) + 1;
-            n = setFlags(n);
+            setFlags(n);
             writeInt(readInt(pc), n);
             pc += 2;
           }
@@ -602,15 +594,13 @@ void cpuStep(){
             // INC R,n    A8 nR
             reg1 = op2 & 0xf;
             n = reg[reg1] + (op2 >> 4);
-            n = setFlags(n);
-            reg[reg1] = n;
+            reg[reg1] = setFlags(n);
           }
           else{
             // INC R    A8 0R       
             reg1 = op2 & 0xf;
             n = reg[reg1] + 1;
-            n = setFlags(n);
-            reg[reg1] = n;
+            reg[reg1] = setFlags(n);
           }
           break;
         case 0xA9:
@@ -618,7 +608,7 @@ void cpuStep(){
             // DEC adr    A9 10 XXXX
             reg1 = op2 & 0xf;
             n = readInt(readInt(pc)) - 1;
-            n = setFlags(n);
+            setFlags(n);
             writeInt(readInt(pc), n);
             pc += 2;
           }
@@ -626,15 +616,13 @@ void cpuStep(){
             // DEC R,n    A9 nR
             reg1 = op2 & 0xf;
             n = reg[reg1] - (op2 >> 4);
-            n = setFlags(n);
-            reg[reg1] = n;
+            reg[reg1] = setFlags(n);
           }
           else{
             // DEC R    A9 0R
             reg1 = op2 & 0xf;
             n = reg[reg1] - 1;
-            n = setFlags(n);
-            reg[reg1] = n;
+            reg[reg1] = setFlags(n);
           }
           break;
         case 0xAA:
@@ -642,24 +630,21 @@ void cpuStep(){
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = reg[reg1] ^ reg[reg2];
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xAB:
           // SHL R,R    AB RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
-          n = reg[reg1] << reg[reg2];
-          n = setFlags(n);
-          reg[reg1] = n;
+          n = (int32_t)reg[reg1] << reg[reg2];
+          reg[reg1] = setFlags(n);
           break;
         case 0xAC:
           // SHR R,R    AC RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
-          n = reg[reg1] >> reg[reg2];
-          n = setFlags(n);
-          reg[reg1] = n;
+          n = (int32_t)reg[reg1] >> reg[reg2];
+          reg[reg1] = setFlags(n);
           break;
         case 0xAD:
           reg1 = op2 & 0xf;
@@ -667,24 +652,27 @@ void cpuStep(){
           // RAND R,R   AD 0R
           if(reg2 == 0x00){
             n = random(0, reg[reg1] + 1);
-            n = setFlags(n);
-            reg[reg1] = n;
+            reg[reg1] = setFlags(n);
           }
           // SQRT R    AD 1R
           else if(reg2 == 0x10){
             n = isqrt(reg[reg1]);
-            n = setFlags(n);
-            reg[reg1] = n;
+            reg[reg1] = setFlags(n);
           }
+          // COS R    AD 2R
           else if(reg2 == 0x20){
             n = getCos(reg[reg1]);
-            n = setFlags(n);
-            reg[reg1] = n;
+            reg[reg1] = setFlags(n);
           }
+          // SIN R    AD 3R
           else if(reg2 == 0x30){
             n = getSin(reg[reg1]);
-            n = setFlags(n);
-            reg[reg1] = n;
+            reg[reg1] = setFlags(n);
+          }
+          // ABS R    AD 4R
+          else if(reg2 == 0x40){
+            n = (n < 0) ? (-n) : n;
+            reg[reg1] = setFlags(n);
           }
           break;
         case 0xAE:
@@ -692,16 +680,14 @@ void cpuStep(){
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = (reg[reg1] != 0 && reg[reg2] != 0) ? 1 : 0;
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
         case 0xAF:
           // ORL R,R    AF RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = (reg[reg1] != 0 || reg[reg2] != 0) ? 1 : 0;
-          n = setFlags(n);
-          reg[reg1] = n;
+          reg[reg1] = setFlags(n);
           break;
       }
       break;
@@ -709,7 +695,7 @@ void cpuStep(){
       //CMP R,CHR   BR XX
       reg1 = (op1 & 0x0f);
       n = reg[reg1] - op2;
-      n = setFlags(n);
+      setFlags(n);
       break;
     case 0xC:
       switch(op1){
@@ -717,7 +703,7 @@ void cpuStep(){
           //CMP R,INT   C0 R0 XXXX
           reg1 = (op2 & 0xf0) >> 4;
           n = reg[reg1] - readInt(pc);
-          n = setFlags(n);
+          setFlags(n);
           pc += 2;
           break;
         case 0xC1:
@@ -725,7 +711,7 @@ void cpuStep(){
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           n = reg[reg1] - reg[reg2];
-          n = setFlags(n);
+          setFlags(n);
           break;
         case 0xC2:
           //LDF R,F   C2 RF
@@ -758,6 +744,33 @@ void cpuStep(){
           else
             reg[reg1] = 0;
           break;
+        case 0xC3:
+          //LDRES X,R   C3 XR
+          reg1 = (op2 & 0xf0) >> 4;
+          reg2 = op2 & 0xf;
+          reg[reg2] = setFlags(n >> reg1);
+          break;
+        case 0xC4:
+          // MULRES X,R    C4 XR
+          reg1 = (op2 & 0xf0) >> 4;
+          reg2 = op2 & 0xf;
+          n = (int32_t)reg[reg2] * (int32_t)(1 << reg1);
+          reg[reg2] = setFlags(n);
+          break;
+        case 0xC5:
+          // DIVRES X,R    C5 XR
+          reg1 = (op2 & 0xf0) >> 4;
+          reg2 = op2 & 0xf;
+          if (reg1 == 0) {
+            if(reg[reg2] != 0)
+              n = n / (int32_t)reg[reg2];
+            else
+              n = 0;//error
+          } else {
+            n = n / (int32_t)(1 << reg1);
+          }
+          reg[reg2] = setFlags(n);
+          break;
       }
       break;
     case 0xD:
@@ -767,20 +780,22 @@ void cpuStep(){
           if (op2 == 0x00) {
             clearScr(espico.bgcolor);
           } else if ((op2 & 0xf0) == 0x10) {
+            //DRECT D0 1R
             reg1 = (op2 & 0xf);
             adr = reg[reg1];
-            // drawRect();
             drawRect(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
           } else if ((op2 & 0xf0) == 0x20) {
+            //FRECT D0 2R
             reg1 = (op2 & 0xf);
             adr = reg[reg1];
             fillRect(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
-          } else if ((op2 & 0xf0) == 0x10) {
+          } else if ((op2 & 0xf0) == 0x30) {
+            //DCIRC D0 3R
             reg1 = (op2 & 0xf);
             adr = reg[reg1];
-            // drawCirc();
             drawCirc(readInt(adr + 4), readInt(adr + 2), readInt(adr));
-          } else if ((op2 & 0xf0) == 0x10) {
+          } else if ((op2 & 0xf0) == 0x40) {
+            //FCIRC D0 4R
             reg1 = (op2 & 0xf);
             adr = reg[reg1];
             fillCirc(readInt(adr + 4), readInt(adr + 2), readInt(adr));
@@ -888,31 +903,31 @@ void cpuStep(){
                 drwLine(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0x70:
-                // // DRSPR R   D47R
+                // // DRWSPR R   D47R
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];//the register contains the address of the values located sequentially h, w, y, x, аdr
                 drawSprite(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0x80:
-                // LDTILE R   D4 8R
+                // SMAPXY R   D4 8R
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];////the register contains the address of the values located sequentially height, width, iheight, iwidth, adr
                 setTile(readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0x90:
-                // SPRSDS R*2 D4 9R
+                // ACTDS R*2 D4 9R
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];////the register contains the address of the values located sequentially direction, speed, n
                 actorSetDirectionAndSpeed(readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0xA0:
-                // DRW1BIT R  D4 AR
+                // DRWBIT R  D4 AR
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];//the register contains the address of the values located sequentially h, w, y, x, аdr
                 drawImageBit(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
               case 0xB0:
-                // DRTILEM R   D4 BR
+                // DRWMAP R   D4 BR
                 reg1 = op2 & 0xf;
                 adr = reg[reg1]; // stack adr, for layer, celh, celw, y0, x0, cely, celx 
                 drawTileMap(readInt(adr +12), readInt(adr + 10), readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
@@ -923,7 +938,7 @@ void cpuStep(){
                 moveActor(reg[reg1]);
                 break;
               case 0xD0:
-                // DRACT R    D4 DR
+                // DRWACT R    D4 DR
                 reg1 = op2 & 0xf;
                 drawActor(reg[reg1]);
                 break;
@@ -941,19 +956,26 @@ void cpuStep(){
             }
             break;
         case 0xD5:
-          // LDSPRT R,R   D5RR
-          reg1 = (op2 & 0xf0) >> 4;//actor 
-          reg2 = op2 & 0xf;//sprite number
-          setActorSprite(reg[reg1] & 0x1f, reg[reg2]);
+          // FSET R,R   D5RR
+          // FGET R     D50R
+          reg1 = (op2 & 0xf0) >> 4; //sprite
+          reg2 = op2 & 0xf; // flag
+          if (reg1 == 0) reg[reg2] = getSpriteFlag(reg[reg2]);
+          else setSpriteFlag(reg[reg1], reg[reg2]);
           break;
         case 0xD6:
-          // SPALET R,R   D6 RR
+          // RPALET       D600
           if (op2 == 0x00) {
             resetPalette(); 
           } else {
+          // SPALET R,R   D6 RR
             reg1 = (op2 & 0xf0) >> 4;//palette color
             reg2 = op2 & 0xf; // color
-            changePalette(reg[reg1] & 15, reg[reg2]);
+	    if (reg1 == 0) {  // PALT  D6 0R
+              setPalT(reg[reg2]);
+	    } else {
+              changePalette(reg[reg1] & 15, reg[reg2]);
+	    }
           }
           break;
         case 0xD7:
@@ -995,32 +1017,31 @@ void cpuStep(){
           reg[reg1] = getPix(reg[reg1], reg[reg2]);
           break;
         case 0xDA:
-          // DRTILE R   DA RR
+          // ATAN2 R,R   DA RR
           reg1 = (op2 & 0xf0) >> 4;//y
           reg2 = op2 & 0xf;//x
           reg[reg1] = atan2_rb(reg[reg1], reg[reg2]);
-          // drawTiles(reg[reg1], reg[reg2]);
           break;
         case 0xDB:
-          // GSPRXY R,R   D8 RR
+          // GACTXY R,R   D8 RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           reg[reg1] = getActorInXY(reg[reg1], reg[reg2]);
           break;
         case 0xDC:
-          // SPRGTX R,X   DC RX
+          // ACTGET R,R   DC RR
           reg1 = (op2 & 0xf0) >> 4;//num
           reg2 = op2 & 0xf;//value
           reg[reg1] = getActorValue(reg[reg1] & 31, reg[reg2]);
           break;
         case 0xDE:
-          // AGBSPR R,R     DE RR
+          // AGBACT R,R     DE RR
           reg1 = (op2 & 0xf0) >> 4;//n1
           reg2 = op2 & 0xf;//n2
           reg[reg1] = angleBetweenActors(reg[reg1], reg[reg2]);
           break;
         case 0xDF:
-          // GTILEXY R,R      DF RR
+          // GMAPXY R,R      DF RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
           reg[reg1] = getTile(reg[reg1], reg[reg2]);
@@ -1028,7 +1049,7 @@ void cpuStep(){
       }
       break;
     case 0xE:
-      // DRSPRT R,R,R ERRR
+      // ACTPOS R,R,R ERRR
       reg1 = (op1 & 0xf);//sprite number
       reg2 = (op2 & 0xf0) >> 4;//x
       reg3 = op2 & 0xf;//y
@@ -1037,7 +1058,7 @@ void cpuStep(){
         setActorValue(reg[reg1] & 0x1f, 7, 1);
       break;
     case 0xF:
-      // SSPRTV R,R,R FR RR
+      // ACTSET R,R,R FR RR
       reg1 = (op1 & 0xf);//sprite number
       reg2 = (op2 & 0xf0) >> 4;//type
       reg3 = op2 & 0xf;//value

@@ -50,21 +50,21 @@ void getKey(){
   dio_in = Wire.read();  //читаем состояние портов PCF8574P(кнопок)
   thiskey = 0;
   if((dio_in & 128) == 0)
-    thiskey |= KEY_LEFT;
+    thiskey |= KEY_A;
   if((dio_in & 64) == 0)
-    thiskey |= KEY_RIGHT;
-  if((dio_in & 32) == 0)
-    thiskey |= KEY_DOWN;
-  if((dio_in & 16) == 0)
-    thiskey |= KEY_UP; //up
-  if((dio_in & 8) == 0)
-    thiskey |= KEY_SELECT;
-  if((dio_in & 4) == 0)
     thiskey |= KEY_B;
+  if((dio_in & 32) == 0)
+    thiskey |= KEY_START;
+  if((dio_in & 16) == 0)
+    thiskey |= KEY_SELECT;
+  if((dio_in & 8) == 0)
+    thiskey |= KEY_RIGHT;
+  if((dio_in & 4) == 0)
+    thiskey |= KEY_DOWN;
   if((dio_in & 2) == 0)
-    thiskey |= KEY_A; 
+    thiskey |= KEY_UP;
   if((dio_in & 1) == 0)
-    thiskey |= KEY_START; 
+    thiskey |= KEY_LEFT;
 }
 
 #endif

@@ -1,6 +1,6 @@
 #include "font_a.c"
 
-#define DISPLAY_X_OFFSET 32
+#define DISPLAY_X_OFFSET 12
 #define SCREEN_WIDTH 128
 #define SCREEN_WIDTH_BYTES 64
 #define SCREEN_HEIGHT 128
@@ -42,39 +42,42 @@
 #define PARTICLE_COUNT 32
 
 struct EspicoState {
-  uint16_t onupdate;
-  uint16_t ondraw;
-  int8_t   updatedone;
-  int8_t   drawdone;
+  int8_t   drawing;
   int8_t   color;
   int8_t   bgcolor;
+  int8_t   imageSize;
   int16_t  fillpattern;
   int16_t  palt;
-  int8_t   imageSize;
   int8_t   regx;
   int8_t   regy;
+  uint8_t  coordshift;
 };  
 
-#define ACTOR_ON_TILE   0x8000
-#define ACTOR_TO_TILE_Y 0x4000
-#define ACTOR_TO_TILE_X 0x2000
+#define ACTOR_IN_EVENT    0x8000
+#define ACTOR_X_EVENT     0x4000
+#define ACTOR_Y_EVENT     0x2000
+#define ACTOR_MAP_COLL    0x0080
 
 struct Actor {
-  uint16_t sprite;
+  uint8_t sprite;
+  uint8_t sw;
+  uint8_t sh;
+  int8_t frame;
+  int8_t lives;
+  uint8_t flags; //0 0 0 0 0 0 scrolled solid
   int16_t x;
   int16_t y;
-  uint8_t width;
-  uint8_t height;
-  int8_t speedx;
-  int8_t speedy;
+  int16_t width;
+  int16_t height;
+  int16_t speedx;
+  int16_t speedy;
+  int16_t refval;
+  int16_t gravity;
   int16_t angle;
-  int8_t lives;
-  int8_t collision;
-  uint8_t flags; //0 0 0 0 0 0 scrolled solid
-  int8_t gravity;
-  int8_t frame;
+  uint16_t collision;
   uint16_t oncollision;
   uint16_t onexitscreen;
+  uint16_t onanimate;
 };
 
 struct Particle {
@@ -167,6 +170,17 @@ struct Emitter emitter __attribute__ ((aligned));
 
 #pragma GCC optimize ("-O2")
 #pragma GCC push_options
+inline uint8_t getSpriteFlag(uint8_t n) {
+  return sprite_flags[n];
+}
+
+inline void setSpriteFlag(uint8_t n, uint8_t v) {
+  sprite_flags[n] = v;
+}
+
+inline int16_t coord(int16_t c) {
+  return (c / (1 << espico.coordshift));
+}
 
 inline int16_t getCos(int16_t g){
   g = g % 360;
@@ -328,25 +342,28 @@ void display_init(){
   initEspicoState();
   resetPalette();
   for(int i = 0; i < 32; i++){
-    actor_table[i].sprite = 5;
+    actor_table[i].sprite = 0;
+    actor_table[i].sw = 8;
+    actor_table[i].sh = 8;
+    actor_table[i].frame = 0;
     actor_table[i].x = -255;
     actor_table[i].y = -255;
-    actor_table[i].width = 8;
-    actor_table[i].height = 8;
+    actor_table[i].width = 0;
+    actor_table[i].height = 0;
     actor_table[i].speedx = 0;
     actor_table[i].speedy = 0;
-    actor_table[i].angle = 0;
     actor_table[i].lives = 0;
     actor_table[i].collision = -1;
-    actor_table[i].flags = 2; //scrolled = 1 solid = 0
+    actor_table[i].flags = 0; //scrolled = 1 solid = 0
     actor_table[i].gravity = 0;
-    actor_table[i].frame = 0;
+    actor_table[i].angle = 0;
+    actor_table[i].refval = 0;
     actor_table[i].oncollision = 0;
     actor_table[i].onexitscreen = 0;
+    actor_table[i].onanimate = 0;
   }
   emitter.time = 0;
   emitter.timer = 0;
-//  tiles.adr = 0;
   for(int i = 0; i < PARTICLE_COUNT; i++)
     particles[i].time = 0;
   for(int i = 0; i < 340; i++)
@@ -355,10 +372,7 @@ void display_init(){
 }
 
 void initEspicoState() {
-  espico.onupdate = 0;
-  espico.ondraw = 0;
-  espico.updatedone = 0;
-  espico.drawdone = 0;
+  espico.drawing = 0;
   espico.color = 7;
   espico.bgcolor = 0;
   espico.fillpattern = 0;
@@ -370,33 +384,17 @@ void initEspicoState() {
 void setEspicoState(int16_t s, int16_t v) {
   switch (s) {
    case 0:
-     espico.updatedone = 1;
+     espico.drawing = v;
      break;
    case 1:
-     espico.onupdate = v;
+     espico.coordshift = v & 0xf;
      break;
-   case 2:
-     espico.drawdone = 1;
-     break;
-   case 3:
-     espico.ondraw = v;
-     break;
-  }
+   }
 }  
-
-void updateGame() {
-  if (espico.onupdate > 0)
-    setinterrupt(espico.onupdate, 0);
-}
-
-void drawBuffer() {
-  if (espico.ondraw > 0)
-    setinterrupt(espico.ondraw, 0);
-}
 
 void redrawScreen() {
   int i;
-  if (espico.ondraw != 0 && !espico.drawdone) return;
+  if (espico.drawing) return;
   cadr_count++;
   for(int y = 0; y < 128; y++){
     i = 0;
@@ -535,14 +533,21 @@ void moveActor(int16_t i) {
     n = 32;
   }
  for(; i < n; i++) 
-  if(actor_table[i].lives > 0){   
+  if(actor_table[i].lives > 0){
+    int16_t event = 0;
     actor_table[i].speedy += actor_table[i].gravity;
     actor_table[i].x += actor_table[i].speedx;
     actor_table[i].y += actor_table[i].speedy;
-    if(actor_table[i].x + actor_table[i].width < 0 || actor_table[i].x > 127 || actor_table[i].y + actor_table[i].height < 0 || actor_table[i].y > 127){
-      if(actor_table[i].onexitscreen > 0)
-         setinterrupt(actor_table[i].onexitscreen, i);
+    if (coord(actor_table[i].x + actor_table[i].width) < 0 || coord(actor_table[i].x) > 127) {
+      event |= ACTOR_X_EVENT;
     }
+    if (coord(actor_table[i].y + actor_table[i].height) < 0 || coord(actor_table[i].y) > 127) {
+      event |= ACTOR_Y_EVENT;
+    }
+    if (event != 0 && actor_table[i].onexitscreen > 0)
+      setinterrupt(actor_table[i].onexitscreen, i | event);
+    if (actor_table[i].onanimate > 0)
+      setinterrupt(actor_table[i].onanimate, i);
   }
 }
 
@@ -553,6 +558,9 @@ inline uint8_t getTile(int16_t x, int16_t y){
 inline void setTile(int16_t x, int16_t y, uint8_t v){
   tile_map[TILEMAP_ADDR(x,y)] = v;
 }
+
+// EFGYYYYYMXXXXXXX
+// EFGIIIIIA00NNNNN
 
 void testActorCollision(){
   byte n, i;
@@ -566,12 +574,18 @@ void testActorCollision(){
           actor_table[n].x + actor_table[n].width > actor_table[i].x &&
           actor_table[n].y < actor_table[i].y + actor_table[i].height && 
           actor_table[n].y + actor_table[n].height > actor_table[i].y){
-            actor_table[n].collision = i;
-            actor_table[i].collision = n;
+		int16_t nevent = 0;
+		int16_t ievent = 0;
+		if (actor_table[n].speedx != 0) nevent |= ACTOR_X_EVENT;
+		if (actor_table[n].speedy != 0) nevent |= ACTOR_Y_EVENT;
+		if (actor_table[i].speedx != 0) ievent |= ACTOR_X_EVENT;
+		if (actor_table[i].speedy != 0) ievent |= ACTOR_Y_EVENT;
+		if (nevent == 0) nevent = ACTOR_IN_EVENT;
+		if (ievent == 0) ievent = ACTOR_IN_EVENT;
             if(actor_table[n].oncollision > 0)
-              setinterrupt(actor_table[n].oncollision, n);
+              setinterrupt(actor_table[n].oncollision, ((i << 8) + n) | nevent);
             if(actor_table[i].oncollision > 0)
-              setinterrupt(actor_table[i].oncollision, i);
+              setinterrupt(actor_table[i].oncollision, ((n << 8) + i) | ievent);
           }
         }
       }
@@ -581,49 +595,46 @@ void testActorCollision(){
 
 void testActorMap(int16_t tx, int16_t ty, int16_t tw, int16_t th, uint8_t flags) {
   int16_t x0, y0;
+  uint16_t event = 0;
   for(int n = 0; n < 32; n++){
+    actor_table[n].collision = -1;
+    event = 0;
     if(actor_table[n].lives > 0){
-      if((actor_table[n].flags & 2) != 0){
+      if((actor_table[n].flags & flags) != 0){
           // check these to be more than 0
-          x0 = ((actor_table[n].x + actor_table[n].width / 2 - tx) / (int16_t)SPRITE_WIDTH);
-          y0 = ((actor_table[n].y + actor_table[n].height / 2 - ty + SPRITE_HEIGHT) / (int16_t)SPRITE_HEIGHT) - 1;
+          // coordshift here!
+          x0 = ((coord(actor_table[n].x + actor_table[n].width / 2) - tx) / (int16_t)SPRITE_WIDTH);
+          y0 = ((coord(actor_table[n].y + actor_table[n].height / 2) - ty + SPRITE_HEIGHT) / (int16_t)SPRITE_HEIGHT) - 1;
           if(x0 >= 0 && x0 < tw && y0 >= 0 && y0 < th){
             if(sprite_flags[getTile(x0,y0)] & flags){
               actor_table[n].collision = (y0 << 8) + x0;
-              actor_table[n].collision |= ACTOR_ON_TILE;
               if(actor_table[n].oncollision > 0)
-                setinterrupt(actor_table[n].oncollision, n); 
+                setinterrupt(actor_table[n].oncollision, n | ACTOR_IN_EVENT | ACTOR_MAP_COLL);
             } else {
+              // all these require coord adjustments...
               if(actor_table[n].speedy > 0 && (sprite_flags[getTile(x0, y0 + 1)] & flags)){
-                if((ty + (y0 + 1) * SPRITE_HEIGHT) - (actor_table[n].y  + actor_table[n].height) < actor_table[n].speedy * 2){
-                  actor_table[n].collision = (y0 << 8) + x0;
-                  actor_table[n].collision |= ACTOR_TO_TILE_Y;
-                  if(actor_table[n].oncollision > 0)
-                    setinterrupt(actor_table[n].oncollision, n); 
+                if((ty + (y0 + 1) * SPRITE_HEIGHT) - coord(actor_table[n].y + actor_table[n].height) < coord(actor_table[n].speedy * 2)){
+                  event |= ACTOR_Y_EVENT;
                 }
               } else if(actor_table[n].speedy < 0 && (sprite_flags[getTile(x0, y0 - 1)] & flags)){
-                if(actor_table[n].y - (ty + y0 * SPRITE_HEIGHT) < actor_table[n].speedy * 2){
-                  actor_table[n].collision = (y0 << 8) + x0;
-                  actor_table[n].collision |= ACTOR_TO_TILE_Y;
-                  if(actor_table[n].oncollision > 0)
-                    setinterrupt(actor_table[n].oncollision, n); 
+                if(coord(actor_table[n].y) - (ty + y0 * SPRITE_HEIGHT) < coord(actor_table[n].speedy * 2)){
+                  event |= ACTOR_Y_EVENT;
                 }
               }
               if(actor_table[n].speedx > 0  && (sprite_flags[getTile(x0 + 1, y0)] & flags)){
-                if((tx + (x0 + 1) * SPRITE_WIDTH - actor_table[n].width) - actor_table[n].x < actor_table[n].speedx * 2){
-                  actor_table[n].collision = (y0 << 8) + x0;
-                  actor_table[n].collision |= ACTOR_TO_TILE_X;
-                  if(actor_table[n].oncollision > 0)
-                    setinterrupt(actor_table[n].oncollision, n); 
+                if((tx + (x0 + 1) * SPRITE_WIDTH - coord(actor_table[n].width)) - coord(actor_table[n].x) < coord(actor_table[n].speedx * 2)){
+                  event |= ACTOR_X_EVENT;
                 }
               } else if(actor_table[n].speedx < 0 && (sprite_flags[getTile(x0 - 1, y0)] & flags)){
-                if(actor_table[n].x - (tx + x0 * SPRITE_WIDTH) < actor_table[n].speedx * 2){
-                  actor_table[n].collision = (y0 << 8) + x0;
-                  actor_table[n].collision |= ACTOR_TO_TILE_X;
-                  if(actor_table[n].oncollision > 0)
-                    setinterrupt(actor_table[n].oncollision, n); 
+                if(coord(actor_table[n].x) - (tx + x0 * SPRITE_WIDTH) < coord(actor_table[n].speedx * 2)){
+                  event |= ACTOR_X_EVENT;
                 }
-              } 
+              }
+              if (event) {
+                actor_table[n].collision = (y0 << 8) + x0;
+                actor_table[n].collision |= ACTOR_MAP_COLL;
+                setinterrupt(actor_table[n].oncollision, n | event | ACTOR_MAP_COLL);
+              }
             } 
           }
         }   
@@ -648,16 +659,13 @@ void setImageSize(uint8_t size){
   espico.imageSize = size;
 }
 
-void setActorSprite(uint16_t n, uint16_t spr){
-  actor_table[n].sprite = (spr < SPRITE_COUNT) ? spr : 0; 
-}
-
 void setActorPosition(int8_t n, uint16_t x, uint16_t y){
   actor_table[n].x = x;
   actor_table[n].y = y;
 }
 
 void actorSetDirectionAndSpeed(int8_t n, uint16_t speed, int16_t dir){
+  // coordshift here?
   actor_table[n].speedx = ((speed * getCos(dir)) >> 6);
   actor_table[n].speedy = ((speed * getSin(dir)) >> 6);
 }
@@ -665,7 +673,8 @@ void actorSetDirectionAndSpeed(int8_t n, uint16_t speed, int16_t dir){
 
 
 int16_t angleBetweenActors(int8_t n1, int8_t n2){
-  int16_t A = atan2_rb(actor_table[n1].y - actor_table[n2].y, actor_table[n1].x - actor_table[n2].x);
+  // using fixed points will probably cause overflow and thus requires coord adjustments
+  int16_t A = atan2_rb(coord(actor_table[n1].y - actor_table[n2].y), coord(actor_table[n1].x - actor_table[n2].x));
  // A = (A < 0) ? A + 360 : A;
   return A;
 }
@@ -692,9 +701,17 @@ int16_t getActorValue(int8_t n, uint8_t t){
     case 8:
       return actor_table[n].collision;
     case 9:
-      return actor_table[n].flags & 2;
+      return actor_table[n].flags;
     case 10:
       return actor_table[n].gravity;
+    case 15:
+      return actor_table[n].sprite;
+    case 16:
+      return actor_table[n].frame;
+    case 17:
+      return actor_table[n].sw;
+    case 18:
+      return actor_table[n].sh;
   }
   return 0;
 }
@@ -708,10 +725,10 @@ void setActorValue(int8_t n, uint8_t t, int16_t v){
       actor_table[n].y = v;
       return;
     case 2:
-      actor_table[n].speedx = (int8_t) v;
+      actor_table[n].speedx = v;
       return;
     case 3:
-      actor_table[n].speedy = (int8_t) v;
+      actor_table[n].speedy = v;
       return;
     case 4:
       actor_table[n].width = v;
@@ -732,10 +749,7 @@ void setActorValue(int8_t n, uint8_t t, int16_t v){
       // Collision cannot be set
       return;
     case 9:
-      if(v != 0)
-        actor_table[n].flags |= 0x01;
-      else
-        actor_table[n].flags &= ~0x01;
+      actor_table[n].flags = v;
       return;
     case 10:
       actor_table[n].gravity = v;
@@ -747,10 +761,19 @@ void setActorValue(int8_t n, uint8_t t, int16_t v){
       actor_table[n].onexitscreen = (uint16_t)v;
       return;
     case 13:
-      if(v != 0)
-        actor_table[n].flags |= 0x02;
-      else
-        actor_table[n].flags &= ~0x02;
+      actor_table[n].onanimate = (uint16_t)v;
+      return;
+    case 15:
+      actor_table[n].sprite = (v < SPRITE_COUNT) ? v : 0; 
+      return;
+    case 16:
+      actor_table[n].frame = v; 
+      return;
+    case 17:
+      actor_table[n].sw = v; 
+      return;
+    case 18:
+      actor_table[n].sh = v; 
       return;
  }
 }
@@ -790,8 +813,9 @@ void drawActor(int8_t i) {
     n = 32;
   }
   for(; i < n; i++)
-    if (actor_table[i].lives > 0)     
-      drawSprite(actor_table[i].sprite+actor_table[i].frame, actor_table[i].x, actor_table[i].y, actor_table[i].width, actor_table[i].height);
+    if (actor_table[i].lives > 0)
+      // coord adjustments here!
+      drawSprite(actor_table[i].sprite+actor_table[i].frame, coord(actor_table[i].x)-(actor_table[i].sw >> 1), coord(actor_table[i].y)-(actor_table[i].sh >> 1), actor_table[i].sw, actor_table[i].sh);
 }
 
 #define IS_TRANSPARENT(col) (espico.palt & (1 << col))
@@ -1045,9 +1069,9 @@ void scrollScreen(uint8_t step, uint8_t direction){
             line_is_draw[y] |= 1;
         screen[SCREEN_ADDR(63, y)] = bufPixel;
       }
-      for(uint8_t n = 0; n < 32; n++)
+      /* for(uint8_t n = 0; n < 32; n++)
         if(actor_table[n].flags & 2)
-          actor_table[n].x -= 2;
+          actor_table[n].x -= 2; */
     }
     else if(direction == 1){
       for(uint8_t x = 0; x < 64; x++){
@@ -1061,9 +1085,9 @@ void scrollScreen(uint8_t step, uint8_t direction){
             line_is_draw[127] |= 2;
         screen[SCREEN_ADDR(x, 127)] = bufPixel;
       }
-      for(uint8_t n = 0; n < 32; n++)
+      /* for(uint8_t n = 0; n < 32; n++)
         if(actor_table[n].flags & 2)
-          actor_table[n].y--;
+          actor_table[n].y--; */
     }
     else if(direction == 0){
       for(uint8_t y = 0; y < 128; y++){
@@ -1077,9 +1101,9 @@ void scrollScreen(uint8_t step, uint8_t direction){
             line_is_draw[y] |= 1;
         screen[SCREEN_ADDR(0, y)] = bufPixel;
       }
-      for(uint8_t n = 0; n < 32; n++)
+      /* for(uint8_t n = 0; n < 32; n++)
         if(actor_table[n].flags & 2)
-          actor_table[n].x += 2;
+          actor_table[n].x += 2; */
     }
     else {
       for(uint8_t x = 0; x < 64; x++){
@@ -1093,9 +1117,9 @@ void scrollScreen(uint8_t step, uint8_t direction){
             line_is_draw[0] |= 1 + x / 32;
         screen[SCREEN_ADDR(x, 0)] = bufPixel;
       }
-      for(uint8_t n = 0; n < 32; n++)
+      /* for(uint8_t n = 0; n < 32; n++)
         if(actor_table[n].flags & 2)
-          actor_table[n].y++;
+          actor_table[n].y++; */
     }
 }
 

@@ -47,10 +47,10 @@ void fileList(String path) {
     drwLine(2, (pos - startpos + 1) * 8 + 7, 124,  (pos - startpos + 1) * 8 + 7);
     redrawScreen();
     clearScr(0);
-    while(thiskey != 0){
+    //while(thiskey != 0){
       getKey();
       delay(100);
-    }
+    //}
     while(thiskey == 0){   
       getKey();
       delay(100);
