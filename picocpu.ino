@@ -61,22 +61,35 @@ void byteToFlags(int16_t b){
   negative = (b & 0x4) >> 2;
 }
 
-void setinterrupt(uint16_t adr, int16_t param){
+inline void nextinterrupt() {
+    reg[0] -= 2;
+    writeInt(reg[0], popOutFifo());
+    reg[0] -= 2;
+    writeInt(reg[0], popOutFifo());
+    reg[0] -= 2;
+    writeInt(reg[0], pc);
+    interrupt = pc;
+    pc = popOutFifo();
+}
+
+void setinterrupt(uint16_t adr, int16_t param1, int16_t param2){
   if(interrupt == 0 && adr != 0){
     shadow_reg[0] = flagsToByte();
     for(int8_t j = 1; j <= 15; j++){
       shadow_reg[j] = reg[j];
     }
     reg[0] -= 2;
-    writeInt(reg[0], param);
+    writeInt(reg[0], param1);
+    reg[0] -= 2;
+    writeInt(reg[0], param2);
     reg[0] -= 2;
     writeInt(reg[0], pc);
     interrupt = pc;
     pc = adr;
-  }
-  else{
+  } else{
+    pushInFifo(param1);
+    pushInFifo(param2);
     pushInFifo(adr);
-    pushInFifo(param);
   }
 }
 
@@ -504,17 +517,19 @@ void cpuStep(){
           else{
             pc = readInt(reg[0]);
             if(pc == interrupt){
-              reg[0] += 4;
-              for(int8_t j = 15; j >= 1; j--){
-                reg[j] = shadow_reg[j];
+              reg[0] += 6;
+              if(interruptFifo.size > 0) {
+                nextinterrupt();
+              } else {
+                for(int8_t j = 15; j >= 1; j--){
+                  reg[j] = shadow_reg[j];
+                }
+                byteToFlags(shadow_reg[0]);
+                interrupt = 0;
               }
-              byteToFlags(shadow_reg[0]);
-              interrupt = 0;
-              if(interruptFifo.size > 0)
-                setinterrupt(popOutFifo(), popOutFifo());
-            }
-            else
+            } else {
               reg[0] += 2;
+            }
           }
           break;
       }
@@ -560,11 +575,17 @@ void cpuStep(){
           // DIV R,R    A5 RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
-          if(reg[reg2] != 0)
-            n = reg[reg1] / reg[reg2];
-          else
-            n = 0;//error
-          reg[reg2] = reg[reg1] % reg[reg2];
+          if(reg[reg1] == 0) {
+            n = 0;
+            reg[reg2] = 0;
+          } else if(reg[reg2] == 0) {
+            n = (reg[reg1] > 0)? 0x7fff : 0x8000;
+            reg[reg2] = 0;
+          } else {
+            n = (int32_t)reg[reg1] / reg[reg2];
+            int m = abs(reg[reg1] % reg[reg2]);
+            reg[reg2] = (reg[reg2] < 0)? -m : m;
+          }
           reg[reg1] = setFlags(n);
           break;
         case 0xA6:
@@ -671,7 +692,7 @@ void cpuStep(){
           }
           // ABS R    AD 4R
           else if(reg2 == 0x40){
-            n = (n < 0) ? (-n) : n;
+            n = abs(reg[reg1]);
             reg[reg1] = setFlags(n);
           }
           break;
@@ -985,7 +1006,7 @@ void cpuStep(){
               case 0x00:
               // SPART R     D7 0R
               // the register contains the address of the values located sequentially  count, time, gravity
-              setParticle(readInt(adr + 4), readInt(adr + 2), readInt(adr));
+              setParticleTime(readInt(adr + 2), readInt(adr));
               break;
               case 0x10:
               // the register contains the address of the values located sequentially  speed, direction2, direction1, time
@@ -993,14 +1014,17 @@ void cpuStep(){
               break;
               case 0x20:
               // the register contains the address of the values located sequentially  color, y, x
-              drawParticle(readInt(adr + 4), readInt(adr + 2), readInt(adr) & 0xf);
+              drawParticles(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
               break;
               case 0x50:
               // the register contains the address of the values located sequentially  y2,x2,y1,x1
-              reg[1] = distancepp(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+              reg[reg1] = distancepp(readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
               break;
               case 0x60:
-              redrawParticles();
+              animateParticles();
+              break;
+              case 0x70:
+              reg[reg1] = makeParticleColor(readInt(adr + 6),readInt(adr + 4), readInt(adr + 2), readInt(adr));
               break;
             }
             break;
