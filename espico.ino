@@ -94,7 +94,7 @@ void coos_screen(void){
     // timeR = millis();
     // wait 50 ms until new screeb redraw
     // timeSpr += millis() - timeR;
-    COOS_DELAY(50);        // 50 ms
+    COOS_DELAY(40);        // 40 ms
     timeR = millis();
     redrawScreen();
     // setRedraw();
@@ -114,10 +114,42 @@ void timer_tick(void){
   }
 }
 
+void pause(){
+  uint8_t prevKey = 128;
+//  drawPause();
+//  redrawScreen();
+#if defined(INFO_RIGHT)
+  tft.fillRect(270, 0, 32, 98, 0x0000);
+  tft.setTextColor(0xF809);
+  tft.fillRect(270, 10, 4, 10, 0xF809);
+  tft.fillRect(276, 10, 4, 10, 0xF809);
+#endif
+  while(1){
+    delay(100);
+    getKey();
+    if((thiskey & 128) && prevKey != 128){
+      thiskey = 0;
+      delay(800);
+      return;
+    }
+    if(thiskey & 16){
+      while(thiskey & 16){
+        delay(100);
+        getKey();
+      }
+      thiskey = 0;
+      fileList("/");
+      return;
+    }
+    prevKey = thiskey;
+  }
+}
+
 void coos_key(void){   
   while(1){
-    COOS_DELAY(100);        // 100 ms
+    COOS_DELAY(80);        // 100 ms
     getKey();
+    if (thiskey == 128) pause();
   }
 }
 

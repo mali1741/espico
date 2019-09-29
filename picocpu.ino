@@ -854,7 +854,13 @@ void cpuStep(){
               reg1 = (op2 & 0xf);
               setCharY(reg[reg1] & 0xff);
               break;
-          }
+            case 0x50:
+              //CLIP R      D15R
+              reg1 = (op2 & 0xf);
+	      adr = reg[reg1];
+              setClip(readInt(adr+6), readInt(adr+4), readInt(adr+2), readInt(adr));
+              break;
+           }
           break;
         case 0xD2: 
           switch(op2 & 0xf0){
@@ -946,9 +952,10 @@ void cpuStep(){
                 // DRWMAP R   D4 BR
                 reg1 = op2 & 0xf;
                 adr = reg[reg1]; // stack adr, for layer, celh, celw, y0, x0, cely, celx 
-                drawTileMap(readInt(adr +12), readInt(adr + 10), readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+                // drawTileMap(0, 0, 0, 8, readInt(adr + 4), readInt(adr + 2), readInt(adr));
+                drawTileMap(readInt(adr + 12), readInt(adr + 10), readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
-             case 0xC0:
+              case 0xC0:
                 // MVACT R    D4 CR
                 reg1 = op2 & 0xf;
                 moveActor(reg[reg1]);
@@ -967,7 +974,7 @@ void cpuStep(){
                 // TACTM R    D4 FR
                 reg1 = op2 & 0xf;
                 adr = reg[reg1];
-                testActorMap(readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
+                testActorMap(readInt(adr + 12), readInt(adr + 10), readInt(adr + 8), readInt(adr + 6), readInt(adr + 4), readInt(adr + 2), readInt(adr));
                 break;
             }
             break;
@@ -1024,10 +1031,10 @@ void cpuStep(){
             }
             break;
         case 0xD8:
-          // SCROLL R,R   D8RR
+          // SCROLL R,R   D8RR  disabled in espico
           reg1 = (op2 & 0xf0) >> 4;//step
           reg2 = op2 & 0xf;//direction
-          scrollScreen(1, reg[reg2]);
+          // scrollScreen(1, reg[reg2]);
           break;
         case 0xD9:
           // GETPIX R,R   D9RR
