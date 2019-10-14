@@ -18,19 +18,24 @@ ADC_MODE(ADC_VCC);
 
 // Use hardware SPI
 TFT_eSPI tft = TFT_eSPI();
-#define RAM_SIZE 21 * 1024
+#define RAM_SIZE 32 * 1024
 #define PRG_SIZE 16 * 1024
 
 // RAM LAYOUT (accessible)
 // 0
 //   PROGRAM INCL VARS
+//   Stack Pointer R0 (going down from PRG_SIZE-1)
 // 16 K
 //   SPRITE MAP
 // 20 K
+//   TILE MAP
+// 24 K
+//   SCREEN
+//
+// Available through get/setSpriteFlags:
 //   256 bytes SPRITE FLAGS
-//   128 bytes LINE_IS_DRAW
-//   Stack Pointer (going down from RAM_SIZE-1)
-// 21 K
+//   128 bytes LINE_IS_DRAWN
+//
 
 // ------------------begin ESP8266'centric----------------------------------
 #define FREQUENCY    160                  // valid 80, 160
@@ -83,7 +88,7 @@ void coos_cpu(void){
     COOS_DELAY(1);        // 1 ms
     timeR = millis();
     cpuOPS += 1;
-    cpuRun(1100);  
+    cpuRun(1100);   // was 1100 before
     timeCpu += millis() - timeR;
   }
 }
