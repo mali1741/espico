@@ -1,4 +1,4 @@
-#define FIFO_MAX_SIZE 32
+#define FIFO_MAX_SIZE 32*4
 
 // #pragma GCC optimize ("-O2")
 // #pragma GCC push_options
@@ -103,7 +103,7 @@ void cpuInit(){
   interrupt = 0;
   fifoClear();
   display_init();
-  reg[0] = RAM_SIZE - 1;//stack pointer
+  reg[0] = PRG_SIZE - 1;//stack pointer
   setCharX(0);
   setCharY(0);
   pc = 0;
@@ -158,11 +158,13 @@ inline int16_t readInt(uint16_t adr){
 }
 
 inline void writeMem(uint16_t adr, int16_t n){
-  if(adr < RAM_SIZE) mem[adr] = n;
+//  if(adr < RAM_SIZE) mem[adr] = n;
+  mem[adr&0x7fff] = n;
 }
 
 inline byte readMem(uint16_t adr){
-  if(adr < RAM_SIZE) return mem[adr];
+  // if(adr < RAM_SIZE) return mem[adr];
+  return mem[adr&0x7fff];
 //  return (adr < RAM_SIZE) ? mem[adr] : 0;
 }
 
@@ -434,6 +436,12 @@ void cpuStep(){
           writeInt(reg[0], readInt(pc));
           pc += 2;
           break;
+        case 0x88:
+          // MEMCPY R   88 0R
+          // reg1 = (op2 & 0xf);
+          // adr = reg[reg1];
+          // memcopy(readInt(adr + 4), readInt(adr + 2), readInt(adr));
+          break;
       }
       break;
     case 0x9:
@@ -531,6 +539,13 @@ void cpuStep(){
               reg[0] += 2;
             }
           }
+        case 0x9B:
+          // CALL (adr)   9B 00 XXXX
+          reg[0] -= 2;
+          // if(reg[0] < 0)
+          //  reg[0] += 0xffff;
+          writeInt(reg[0], pc + 2);
+          pc = readInt(readInt(pc));
           break;
       }
       break;
@@ -691,6 +706,16 @@ void cpuStep(){
           // ABS R    AD 4R
           else if(reg2 == 0x40){
             n = abs(reg[reg1]);
+            reg[reg1] = n;
+          }
+           // NOTL R    AD 5R
+          else if(reg2 == 0x50){
+            n = (reg[reg1]) ? 0 : 1;
+            reg[reg1] = n;
+          }
+           // NOT R    AD 6R
+          else if(reg2 == 0x60){
+            n = ~(reg[reg1]);
             reg[reg1] = n;
           }
           break;
@@ -857,7 +882,7 @@ void cpuStep(){
             case 0x50:
               //CLIP R      D15R
               reg1 = (op2 & 0xf);
-	      adr = reg[reg1];
+	            adr = reg[reg1];
               setClip(readInt(adr+6), readInt(adr+4), readInt(adr+2), readInt(adr));
               break;
            }
@@ -1088,7 +1113,8 @@ void cpuStep(){
       reg1 = (op1 & 0xf);//sprite number
       reg2 = (op2 & 0xf0) >> 4;//type
       reg3 = op2 & 0xf;//value
-      setActorValue(reg[reg1] & 0x1f, reg[reg2], reg[reg3]); 
+      if (reg[reg2] == -1) resetActor(reg[reg1]);
+      else setActorValue(reg[reg1] & 0x1f, reg[reg2], reg[reg3]); 
       break;
   }
 }
