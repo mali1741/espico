@@ -5,7 +5,8 @@
 #define SCREEN_WIDTH_BYTES 64
 #define SCREEN_HEIGHT 128
 #define SCREEN_SIZE (SCREEN_HEIGHT * SCREEN_WIDTH_BYTES)
-// #define ONE_DIM_SCREEN_ARRAY
+#define LINE_DRAWN_SIZE SCREEN_HEIGHT
+#define ONE_DIM_SCREEN_ARRAY
 
 #ifndef ONE_DIM_SCREEN_ARRAY
 #define SCREEN_ARRAY_DEF SCREEN_HEIGHT][SCREEN_WIDTH_BYTES
@@ -22,7 +23,6 @@
 #define SPRITE_MAP_SIZE 4096
 #define SPRITE_FLAGS_SIZE 256
 #define SPRITE_ARRAY_DEF SPRITE_MAP_SIZE
-#define SPRITE_MEMMAP PRG_SIZE
 #define SPRITE_ADDR(n)  (((int)(n & 0xf0) << 5) + ((n & 0x0f) << 2))
 #define SPRITE_PIX(x, y) ((int(y) << 6) + (x))
 #define TILEMAP_SIZE 4096
@@ -66,7 +66,7 @@ struct EspicoState {
 #define ACTOR_B_EVENT     0x0400
 #define ACTOR_L_EVENT     0x0200
 #define ACTOR_R_EVENT     0x0100
-#define ACTOR_EXIT_EVENT  0x0080
+#define ACTOR_ANIM_EVENT  0x8000
 #define ACTOR_MAP_COLL    0x8000
 
 
@@ -90,7 +90,7 @@ struct Actor {
   int16_t speedy;
 
   int16_t gravity;
-  int16_t angle;
+  uint16_t opts_angle;   //  HVEA AAAAAAAA    - bits use: A - angle (0-359) , E - cb_anim on exit only, V - flip vertical, H - flip horizontal 
 
   uint16_t oncollision;
   uint16_t onanimate;
@@ -119,7 +119,7 @@ struct Emitter {
   int8_t speedx1;
   int8_t speedy1;
 };
-
+/*
 static const int8_t cosT[] PROGMEM = {
   0x40, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3e, 0x3e, 0x3e, 0x3e, 0x3d, 0x3d, 0x3d, 0x3c, 0x3c, 
   0x3c, 0x3b, 0x3b, 0x3a, 0x3a, 0x3a, 0x39, 0x39, 0x38, 0x37, 0x37, 0x36, 0x36, 0x35, 0x35, 0x34, 0x33, 0x33, 0x32, 0x31, 
@@ -160,6 +160,19 @@ static const int8_t sinT[] PROGMEM = {
   0xdc, 0xdd, 0xde, 0xdf, 0xdf, 0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xee, 0xef, 
   0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe
 };
+*/
+static const uint8_t isinTable8[] PROGMEM = {
+    0,   4,   9,  13,  18,  22,  27,  31,  35,  40, 
+   44,  49,  53,  57,  62,  66,  70,  75,  79,  83,
+   87,  91,  96, 100, 104, 108, 112, 116, 120, 124, 
+
+  128, 131, 135, 139, 143, 146, 150, 153, 157, 160,
+  164, 167, 171, 174, 177, 180, 183, 186, 190, 192,
+  195, 198, 201, 204, 206, 209, 211, 214, 216, 219,
+  221, 223, 225, 227, 229, 231, 233, 235, 236, 238, 
+  240, 241, 243, 244, 245, 246, 247, 248, 249, 250,
+  251, 252, 253, 253, 254, 254, 254, 255, 255, 255
+};
 
 static const uint16_t epalette[] PROGMEM = {
      0x0000, 0x194A, 0x792A, 0x042A, 0xAA86, 0x5AA9, 0xC618, 0xFF9D,
@@ -167,36 +180,76 @@ static const uint16_t epalette[] PROGMEM = {
 };
 
 uint16_t palette[16] __attribute__ ((aligned));
-uint8_t drwpalette[16] __attribute__ ((aligned));
+uint8_t  drwpalette[16] __attribute__ ((aligned));
 uint16_t pix_buffer[256] __attribute__ ((aligned));
-uint8_t screen[SCREEN_ARRAY_DEF] __attribute__ ((aligned));
-uint8_t tile_map[TILEMAP_SIZE] __attribute ((aligned));
-struct EspicoState espico __attribute__ ((aligned));
-// uint16_t *palette __attribute__ ((aligned)) = (uint16_t *)&mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE+128];
-//uint8_t *drwpalette __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE+128+32];
-uint8_t *line_is_draw __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE];
+
+#define SCREEN_MEMMAP (PRG_SIZE+SPRITE_MAP_SIZE+TILEMAP_SIZE)
+#define TILE_MEMMAP   (PRG_SIZE+SPRITE_MAP_SIZE)
+#define SPRITE_MEMMAP (PRG_SIZE)
+
+// uint8_t screen[SCREEN_ARRAY_DEF] __attribute__ ((aligned));
+uint8_t *screen __attribute__ ((aligned)) = &mem[SCREEN_MEMMAP];
+uint8_t *tile_map __attribute__ ((aligned)) = &mem[TILE_MEMMAP];
 uint8_t *sprite_map __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP];
-uint8_t *sprite_flags __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE];
+
+// uint8_t tile_map[TILEMAP_SIZE] __attribute ((aligned));
+// uint16_t *palette __attribute__ ((aligned)) = (uint16_t *)&mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE+128];
+// uint8_t *drwpalette __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE+128+32];
+
+uint8_t sprite_flags[SPRITE_FLAGS_SIZE+LINE_DRAWN_SIZE] __attribute__ ((aligned));
+// uint8_t line_is_draw[LINE_DRAWN_SIZE] __attribute__ ((aligned));
+uint8_t *line_is_draw __attribute__ ((aligned)) = &sprite_flags[SPRITE_FLAGS_SIZE];
+
+// uint8_t *line_is_draw __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+TILEMAP_SIZE+SPRITE_FLAGS_SIZE];
+// uint8_t *sprite_flags __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+TILEMAP_SIZE];
 char charArray[340] __attribute__ ((aligned));
 struct Actor actor_table[32] __attribute__ ((aligned));
 struct Particle particles[PARTICLE_COUNT] __attribute__ ((aligned));
 struct Emitter emitter __attribute__ ((aligned));
+struct EspicoState espico __attribute__ ((aligned));
 uint16_t frame_count = 0; 
 
 #pragma GCC optimize ("-O2")
 #pragma GCC push_options
-inline uint8_t getSpriteFlag(uint8_t n) {
-  return sprite_flags[n];
+inline uint8_t getSpriteFlag(uint16_t n) {
+  return ((n < (SPRITE_FLAGS_SIZE+LINE_DRAWN_SIZE)) ? sprite_flags[n] : 0);
 }
 
-inline void setSpriteFlag(uint8_t n, uint8_t v) {
-  sprite_flags[n] = v;
+inline void setSpriteFlag(uint16_t n, uint8_t v) {
+  if (n < (SPRITE_FLAGS_SIZE+LINE_DRAWN_SIZE)) sprite_flags[n] = v;
 }
 
 inline int16_t coord(int16_t c) {
   return (c / (1 << espico.coordshift));
 }
 
+int16_t isin(int16_t x) {
+  boolean pos = true;  // positive - keeps an eye on the sign.
+  if (x < 0)
+  {
+    x = -x;
+    pos = !pos;
+  }
+  if (x >= 360) x %= 360;
+  if (x > 180)
+  {
+    x -= 180;
+    pos = !pos;
+  }
+  if (x > 90) x = 180 - x;
+  if (x == 90) return ((pos) ? 128 : -128);
+  if (pos) return (int16_t)(pgm_read_byte_near(isinTable8 + x)/2);
+  return -(int16_t)(pgm_read_byte_near(isinTable8 + x)/2);
+}
+
+inline int16_t getCos(int16_t g){
+  return isin(g+90);
+}
+
+inline int16_t getSin(int16_t g){
+  return isin(g);
+}
+/*
 inline int16_t getCos(int16_t g){
   g = g % 360;
   if(g < 0)
@@ -210,7 +263,7 @@ inline int16_t getSin(int16_t g){
     g += 360;
   return (int16_t)(int8_t)pgm_read_byte_near(sinT + g);
 }
-
+*/
 
 int16_t atan2_rb(int16_t y, int16_t x) {
    // Fast XY vector to integer degree algorithm - Jan 2011 www.RomanBlack.com
@@ -353,28 +406,42 @@ void resetPalette() {
   espico.palt = 1; // black is transparent
 }
 
+void resetActor(int16_t n) {
+  int m = 0;
+
+  if (n == -1) {
+    n = 0;
+    m = 32;
+  } else {
+    n = n & 31;
+    m = n + 1;
+  }
+
+  for(; n < m; n++){
+    actor_table[n].sprite = 0;
+    actor_table[n].sw = 8;
+    actor_table[n].sh = 8;
+    actor_table[n].frame = 0;
+    actor_table[n].x = 0x8000;
+    actor_table[n].y = 0x8000;
+    actor_table[n].hw = 0;
+    actor_table[n].hh = 0;
+    actor_table[n].speedx = 0;
+    actor_table[n].speedy = 0;
+    actor_table[n].lives = 0;
+    actor_table[n].flags = 0; //scrolled = 1 solid = 0
+    actor_table[n].gravity = 0;
+    actor_table[n].opts_angle = 0;
+    actor_table[n].refval = 0;
+    actor_table[n].oncollision = 0;
+    actor_table[n].onanimate = 0;
+  }
+}
+
 void display_init(){
   initEspicoState();
   resetPalette();
-  for(int i = 0; i < 32; i++){
-    actor_table[i].sprite = 0;
-    actor_table[i].sw = 8;
-    actor_table[i].sh = 8;
-    actor_table[i].frame = 0;
-    actor_table[i].x = 0x8000;
-    actor_table[i].y = 0x8000;
-    actor_table[i].hw = 0;
-    actor_table[i].hh = 0;
-    actor_table[i].speedx = 0;
-    actor_table[i].speedy = 0;
-    actor_table[i].lives = 0;
-    actor_table[i].flags = 0; //scrolled = 1 solid = 0
-    actor_table[i].gravity = 0;
-    actor_table[i].angle = 0;
-    actor_table[i].refval = 0;
-    actor_table[i].oncollision = 0;
-    actor_table[i].onanimate = 0;
-  }
+  resetActor(-1);
   // emitter.time = 0;
   for(int i = 0; i < PARTICLE_COUNT; i++)
     particles[i].time = 0;
@@ -665,9 +732,12 @@ void moveActor(int16_t i) {
     
     if (coord(actor_table[i].y + actor_table[i].hh) < 0) event |= ACTOR_T_EVENT;
     else if (coord(actor_table[i].y) > 127) event |= ACTOR_B_EVENT;
-    
+
+    if (event == 0) event = ACTOR_IN_EVENT;
+    event |= ACTOR_ANIM_EVENT;
+
     if (actor_table[i].onanimate > 0)
-      setinterrupt(actor_table[i].onanimate, event | i, (frame_count & 31) | ((event!=0)?ACTOR_EXIT_EVENT:0));
+      setinterrupt(actor_table[i].onanimate, event | i, (frame_count & 31));
   }
 }
 
@@ -876,7 +946,7 @@ int16_t getActorValue(int8_t n, uint8_t t){
     case 5:
       return actor_table[n].hh;
     case 6:
-      return actor_table[n].angle;
+      return actor_table[n].opts_angle & 0x01FF;
     case 7:
       return actor_table[n].lives;
     case 8:
@@ -921,7 +991,8 @@ void setActorValue(int8_t n, uint8_t t, int16_t v){
       v = v % 360;
       if(v < 0)
         v += 360;
-      actor_table[n].angle = v;
+      actor_table[n].opts_angle &= 0xFE00;
+      actor_table[n].opts_angle |= v;
       return;
     case 7:
       actor_table[n].lives = v;
@@ -1037,7 +1108,7 @@ void drawImgP(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_nex
 
 void drawImg(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h){
   int add_next_row = 0;
-  if (a >= SPRITE_MEMMAP) {
+  if (a >= PRG_SIZE) {
     add_next_row = 64 - (w >> 1);
   }
   if(espico.imageSize > 1){
