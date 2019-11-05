@@ -48,6 +48,7 @@ void getKey(){
   Wire.endTransmission();
   Wire.requestFrom(i2c_adress,(uint8_t)1);
   dio_in = Wire.read();  //читаем состояние портов PCF8574P(кнопок)
+  lastkey = thiskey;
   thiskey = 0;
   if((dio_in & 128) == 0)
     thiskey |= KEY_A;

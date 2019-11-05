@@ -365,7 +365,7 @@ void cpuStep(){
         case 0x50:
           //HLT       5000
           //pc -= 2;
-          fileList("/");
+          fileList("/games");
           break;
         case 0x51:
           // STIMER R,R   51RR
@@ -387,18 +387,18 @@ void cpuStep(){
       }
       break;
     case 0x6:
-      // LDI R,(R+R)  6R RR
+      // LDIAL R,(R+R*2)  6R RR
       reg1 = (op1 & 0xf);
       reg2 = ((op2 & 0xf0) >> 4);
       reg3 = (op2 & 0xf);
-      n = reg[reg1] = readInt(reg[reg2] + reg[reg3]);
+      n = reg[reg1] = readInt(reg[reg2] + reg[reg3]*2);
       break;
     case 0x7:
-      // STI (R+R),R  7R RR
+      // STIAL (R+R*2),R  7R RR
       reg1 = (op1 & 0xf);
       reg2 = ((op2 & 0xf0) >> 4);
       reg3 = (op2 & 0xf);
-      writeInt(reg[reg1] + reg[reg2], reg[reg3]);
+      writeInt(reg[reg1] + reg[reg2]*2, reg[reg3]);
       break;  
     case 0x8:
       switch(op1){
@@ -437,10 +437,22 @@ void cpuStep(){
           pc += 2;
           break;
         case 0x88:
-          // MEMCPY R   88 0R
-          // reg1 = (op2 & 0xf);
-          // adr = reg[reg1];
-          // memcopy(readInt(adr + 4), readInt(adr + 2), readInt(adr));
+          // MEMSET R             88 0R
+          // MEMCPY R             88 1R
+          reg1 = (op2 & 0xf0);
+          reg2 = (op2 & 0x0f);
+          adr = reg[reg2];
+          uint16_t ptr1 = (readInt(adr + 4) & 0x7fff);
+          uint16_t ptr2 = (readInt(adr + 2) & 0x7fff);
+          uint16_t numb = readInt(adr);
+          if (numb > 0x8000) numb = 0x8000;
+            if (ptr1 + numb > 0x8000) numb = 0x8000 - ptr1;
+            if (reg1 == 0x00) {
+              memset(&mem[ptr1], ptr2 & 0xff, numb);
+            } else if (reg1 == 0x10) {
+              if (ptr2 + numb > 0x8000) numb = 0x8000 - ptr2;
+              memcpy(&mem[ptr1], &mem[ptr2], numb);
+            }
           break;
       }
       break;
@@ -510,11 +522,16 @@ void cpuStep(){
           break;
         case 0x99:
           // CALL adr   99 00 XXXX
+          // CALL (adr)   99 10 XXXX
+          // CALL (adr+R)   99 2R XXXX
+          reg1 = op2 & 0xf; 
           reg[0] -= 2;
           // if(reg[0] < 0)
           //  reg[0] += 0xffff;
           writeInt(reg[0], pc + 2);
-          pc = readInt(pc);
+          if ((op2 & 0xf0) == 0x20) pc = readInt(readInt(pc) + reg[reg1]);
+          else if ((op2 & 0xf0) == 0x10) pc = readInt(readInt(pc));
+          else pc = readInt(pc);
           break;
         case 0x9A:
           // RET      9A 00
@@ -539,14 +556,6 @@ void cpuStep(){
               reg[0] += 2;
             }
           }
-        case 0x9B:
-          // CALL (adr)   9B 00 XXXX
-          reg[0] -= 2;
-          // if(reg[0] < 0)
-          //  reg[0] += 0xffff;
-          writeInt(reg[0], pc + 2);
-          pc = readInt(readInt(pc));
-          break;
       }
       break;
     case 0xA:
@@ -847,16 +856,12 @@ void cpuStep(){
             case 0x00:
               //PUTC R  D10R
               reg1 = (op2 & 0xf);
-              printc((char)reg[reg1], espico.color, espico.bgcolor);
+              printc((char)reg[reg1]);
               break;
             case 0x10:
               //PUTS R  D11R
               reg1 = (op2 & 0xf);
-              j = 0;
-              while(!(readMem(reg[reg1] + j) == 0 || j > 1000)){
-                printc((char)(readMem(reg[reg1] + j)), espico.color, espico.bgcolor);
-                j++;
-              }
+              prints(reg[reg1]);
               break;
             case 0x20:
               //PUTN R D12R
@@ -866,7 +871,7 @@ void cpuStep(){
               else
                 s_buffer = String(reg[reg1] - 0x10000);
               for(j = 0; j < s_buffer.length(); j++){
-                printc(s_buffer[j], espico.color, espico.bgcolor);
+                printc(s_buffer[j]);
               }
               break;
             case 0x30:
@@ -902,6 +907,19 @@ void cpuStep(){
               reg1 = (op2 & 0xf);
               n = reg[reg1] = thiskey;
               break;
+            case 0x20:
+              // BTN R                        D22R
+              reg1 = (op2 & 0xf);
+              reg[reg1] &= 7;
+              n = reg[reg1] = ((1 << reg[reg1]) & thiskey);
+              break;
+            case 0x30:
+              // BTNP R                       D23R
+              reg1 = (op2 & 0xf);
+              reg[reg1] &= 7;
+              n = reg[reg1] = ((1 << reg[reg1]) & thiskey & (~lastkey));
+              break;
+
           }
           break;
         case 0xD3:

@@ -26,9 +26,13 @@ void fileList(String path) {
       }
       else{
         strcpy(s, entry.name());
-        if(lst + startpos - 1 == pos)
+        if(lst + startpos - 1 == pos) {
           strcpy(thisF, entry.name());
-        putString(s, lst * 8);
+          setColor(8);
+        } else {
+          setColor(7);
+        }
+        putStringUC(strrchr(s,'/')+1, lst * 8 + 2);
         lst++;
       }
       entry.close();   
@@ -42,9 +46,9 @@ void fileList(String path) {
     else if(startpos > pos){
       startpos = pos;
     }
-    setColor(6);
-    drwLine(2, (pos - startpos + 1) * 8, 124,  (pos - startpos + 1) * 8);
-    drwLine(2, (pos - startpos + 1) * 8 + 7, 124,  (pos - startpos + 1) * 8 + 7);
+    // setColor(6);
+    // drwLine(2, (pos - startpos + 1) * 8, 124,  (pos - startpos + 1) * 8);
+    // drwLine(2, (pos - startpos + 1) * 8 + 7, 124,  (pos - startpos + 1) * 8 + 7);
     redrawScreen();
     clearScr(0);
     //while(thiskey != 0){
@@ -64,7 +68,7 @@ void fileList(String path) {
         }
       }
     }
-    if(thiskey & 16){//ok
+    if(thiskey & KEY_A){//ok
       cpuInit();
       int len = strlen(thisF);
       if (len > 4 && strcmp(&thisF[len-4], ".epo") == 0) {
@@ -78,19 +82,19 @@ void fileList(String path) {
       }
       return;
     }
-    else if(thiskey & 2){//down
+    else if(thiskey & KEY_DOWN){//down
       if(pos < fileCount - 1)
         pos++;
       if(pos - startpos > 12)
         startpos++;
     }
-    else if(thiskey & 1){//up
+    else if(thiskey & KEY_UP){//up
       if(pos > 0)
         pos--;
       if(pos - startpos < 0)
         startpos--;
     }
-    if(thiskey & 4){//left
+    if(thiskey & KEY_LEFT){//left
       cpuInit();
       return;
     }
