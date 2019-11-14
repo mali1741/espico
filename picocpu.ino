@@ -1,7 +1,7 @@
 #define FIFO_MAX_SIZE 32*4
 
-// #pragma GCC optimize ("-O2")
-// #pragma GCC push_options
+#pragma GCC optimize ("-O2")
+#pragma GCC push_options
 
 #define toInt16(n) ((int16_t)n)
 
@@ -11,10 +11,8 @@ uint16_t pc = 0;
 uint16_t interrupt = 0;
 int32_t n = 0;
 int32_t shadow_n = 0;
-// byte carry = 0;
-// byte zero = 0;
-// byte negative = 0;
 byte redraw = 0;
+uint16_t ticks = 0;
 String s_buffer;
 
 struct Fifo_t {
@@ -26,7 +24,7 @@ struct Fifo_t {
 
 struct Fifo_t interruptFifo __attribute__ ((aligned));
 
-void fifoClear(){
+inline void fifoClear(){
   interruptFifo.position_read = 0;
   interruptFifo.position_write = 0;
   interruptFifo.size = 0;
@@ -53,17 +51,7 @@ uint16_t popOutFifo(){
   }
   return out;
 }
-/*
-int16_t flagsToByte(){
-  return (carry & 0x1) + ((zero & 0x1) << 1)  + ((negative & 0x1) << 2);
-}
-  
-void byteToFlags(int16_t b){
-  carry = b & 0x1;
-  zero = (b & 0x2) >> 1;
-  negative = (b & 0x4) >> 2;
-}
-*/
+
 inline void nextinterrupt() {
     reg[0] -= 2;
     writeInt(reg[0], popOutFifo());
@@ -207,9 +195,12 @@ int16_t distancepp(int16_t x1, int16_t y1, int16_t x2, int16_t y2){
   return isqrt((x2 - x1)*(x2 - x1) + (y2-y1)*(y2-y1));
 }
 
-void cpuRun(uint16_t n){
-  for(uint16_t i=0; i < n; i++)
+inline uint16_t cpuRun(uint16_t n){
+  uint16_t i;
+  ticks = n;
+  for(i=0; i < ticks; i++)
     cpuStep();
+  return i;
 }
 
 void cpuStep(){
@@ -364,8 +355,18 @@ void cpuStep(){
       switch(op1){ 
         case 0x50:
           //HLT       5000
-          //pc -= 2;
-          fileList("/games");
+          //FLIP      5050
+          if (op2 == 0x50) {
+            if (redraw) {
+              redraw = 0;
+              break;
+            }
+            // disable cpuRun
+            ticks = 0;
+            pc -= 2;
+          } else {
+            fileList("/games");
+          }
           break;
         case 0x51:
           // STIMER R,R   51RR
@@ -890,7 +891,24 @@ void cpuStep(){
 	            adr = reg[reg1];
               setClip(readInt(adr+6), readInt(adr+4), readInt(adr+2), readInt(adr));
               break;
-           }
+            case 0xA0:
+              //DRWADR R      D1AR
+              //RSTDAD        D1A0
+              reg1 = (op2 & 0xf);
+              if (reg1 == 0) {
+                resetDrawAddr();
+              } else {
+                setDrawAddr(reg[reg1]);
+              }
+              break;
+            case 0xD0:
+              //RSTLRD R      D1D0
+              reg1 = (op2 & 0xf);
+              if (reg1 == 0) {
+                memset(line_draw, 0, LINE_REDRAW_SIZE);
+              }
+              break;
+          }
           break;
         case 0xD2: 
           switch(op2 & 0xf0){
@@ -910,14 +928,22 @@ void cpuStep(){
             case 0x20:
               // BTN R                        D22R
               reg1 = (op2 & 0xf);
-              reg[reg1] &= 7;
-              n = reg[reg1] = ((1 << reg[reg1]) & thiskey);
+              n = thiskey;
+              if (reg[reg1] != -1) {
+                reg[reg1] &= 7;
+                n &= (1 << reg[reg1]);
+              }
+              reg[reg1] = n;
               break;
             case 0x30:
               // BTNP R                       D23R
               reg1 = (op2 & 0xf);
-              reg[reg1] &= 7;
-              n = reg[reg1] = ((1 << reg[reg1]) & thiskey & (~lastkey));
+              n = thiskey & (~lastkey);
+              if (reg[reg1] != -1) {
+                reg[reg1] &= 7;
+                n &= (1 << reg[reg1]);
+              }
+              reg[reg1] = n;
               break;
 
           }
@@ -1118,13 +1144,38 @@ void cpuStep(){
       }
       break;
     case 0xE:
-      // ACTPOS R,R,R ERRR
-      reg1 = (op1 & 0xf);//sprite number
-      reg2 = (op2 & 0xf0) >> 4;//x
-      reg3 = op2 & 0xf;//y
-      setActorPosition(reg[reg1] & 0x1f, reg[reg2], reg[reg3]);
-      if(getActorValue(reg[reg1] & 0x1f, 7) < 1)
-        setActorValue(reg[reg1] & 0x1f, 7, 1);
+      // SOUND
+      switch (op1) {
+        case 0xE0:
+          switch (op2) {
+            // PLAYRT               E000
+            case 0x00:
+              setRtttlPlay(1);
+              break;
+            // PAUSERT              E001
+            case 0x01:
+              setRtttlPlay(0);
+              break;
+            // STOPRT               E002
+            case 0x02:
+              setRtttlPlay(2);
+              break;
+          }
+          break;
+        case 0xE1:
+          // LOADRT               E1RR
+          reg1 = (op2 & 0xf0) >> 4;
+          reg2 = op2 & 0xf;
+          setRtttlAddress(reg[reg1]);
+          setRtttlLoop(reg[reg2]);
+          break;
+        case 0xE2:
+          // PLAYTN               E2RR
+          reg1 = (op2 & 0xf0) >> 4;
+          reg2 = op2 & 0xf;
+          addTone(reg[reg1], reg[reg2]);
+          break;
+      }
       break;
     case 0xF:
       // ACTSET R,R,R FR RR
@@ -1137,5 +1188,4 @@ void cpuStep(){
   }
 }
 
-// #pragma GCC pop_options
-
+#pragma GCC pop_options

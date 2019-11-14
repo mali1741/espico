@@ -5,7 +5,7 @@
 #define SCREEN_WIDTH_BYTES 64
 #define SCREEN_HEIGHT 128
 #define SCREEN_SIZE (SCREEN_HEIGHT * SCREEN_WIDTH_BYTES)
-#define LINE_DRAWN_SIZE SCREEN_HEIGHT
+#define LINE_REDRAW_SIZE SCREEN_HEIGHT
 
 #define SCREEN_ARRAY_DEF SCREEN_SIZE
 #define SCREEN_ADDR(x, y) ((int(y) << 6) + int(x))
@@ -63,6 +63,7 @@ struct EspicoState {
 #define ACTOR_R_EVENT     0x0100
 #define ACTOR_ANIM_EVENT  0x8000
 #define ACTOR_MAP_COLL    0x8000
+#define ACTOR_OPTS_EXIT_ONLY 0x0200
 
 struct Actor {
   uint8_t sprite;
@@ -71,7 +72,7 @@ struct Actor {
   uint8_t sh;
 
   int8_t  lives;
-  uint8_t flags; //0 0 0 0 0 0 scrolled solid
+  uint8_t flags; // 0 0 0 0 0 0 scrolled solid
   int16_t refval;
 
   int16_t x;
@@ -181,40 +182,30 @@ uint16_t pix_buffer[256] __attribute__ ((aligned));
 #define TILE_MEMMAP   (PRG_SIZE+SPRITE_MAP_SIZE)
 #define SPRITE_MEMMAP (PRG_SIZE)
 
-// uint8_t screen[SCREEN_ARRAY_DEF] __attribute__ ((aligned));
-// uint8_t *screen __attribute__ ((aligned)) = &mem[SCREEN_MEMMAP];
-// uint8_t *tile_map __attribute__ ((aligned)) = &mem[TILE_MEMMAP];
-// uint8_t *sprite_map __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP];
-
+uint8_t *redrawscreen __attribute__ ((aligned));
 uint8_t *screen __attribute__ ((aligned));
 uint8_t *tile_map __attribute__ ((aligned));
 uint8_t *sprite_map __attribute__ ((aligned));
 
-// uint8_t tile_map[TILEMAP_SIZE] __attribute ((aligned));
-// uint16_t *palette __attribute__ ((aligned)) = (uint16_t *)&mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE+128];
-// uint8_t *drwpalette __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+SPRITE_FLAGS_SIZE+128+32];
+uint8_t sprite_flags[SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE+LINE_REDRAW_SIZE] __attribute__ ((aligned));
+uint8_t *line_redraw __attribute__ ((aligned)) = &sprite_flags[SPRITE_FLAGS_SIZE];
+uint8_t *line_draw __attribute__ ((aligned)) = &sprite_flags[SPRITE_FLAGS_SIZE];
 
-uint8_t sprite_flags[SPRITE_FLAGS_SIZE+LINE_DRAWN_SIZE] __attribute__ ((aligned));
-// uint8_t line_is_draw[LINE_DRAWN_SIZE] __attribute__ ((aligned));
-uint8_t *line_is_draw __attribute__ ((aligned)) = &sprite_flags[SPRITE_FLAGS_SIZE];
-
-// uint8_t *line_is_draw __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+TILEMAP_SIZE+SPRITE_FLAGS_SIZE];
-// uint8_t *sprite_flags __attribute__ ((aligned)) = &mem[SPRITE_MEMMAP+SPRITE_MAP_SIZE+TILEMAP_SIZE];
-// char charArray[340] __attribute__ ((aligned));
 struct Actor actor_table[32] __attribute__ ((aligned));
 struct Particle particles[PARTICLE_COUNT] __attribute__ ((aligned));
 struct Emitter emitter __attribute__ ((aligned));
 struct EspicoState espico __attribute__ ((aligned));
 uint16_t frame_count = 0; 
+// uint16_t seqr __attribute__ ((aligned)) = 1; 
 
 #pragma GCC optimize ("-O2")
 #pragma GCC push_options
 inline uint8_t getSpriteFlag(uint16_t n) {
-  return ((n < (SPRITE_FLAGS_SIZE+LINE_DRAWN_SIZE)) ? sprite_flags[n] : 0);
+  return ((n < (SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE+LINE_REDRAW_SIZE)) ? sprite_flags[n] : 0);
 }
 
 inline void setSpriteFlag(uint16_t n, uint8_t v) {
-  if (n < (SPRITE_FLAGS_SIZE+LINE_DRAWN_SIZE)) sprite_flags[n] = v;
+  if (n < (SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE+LINE_REDRAW_SIZE)) sprite_flags[n] = v;
 }
 
 inline int16_t coord(int16_t c) {
@@ -386,9 +377,24 @@ void memoryAlloc(){
     Serial.println(F("Out of memory"));
     return;
   }
+  redrawscreen = &mem[SCREEN_MEMMAP];
   screen = &mem[SCREEN_MEMMAP];
   tile_map = &mem[TILE_MEMMAP];
   sprite_map = &mem[SPRITE_MEMMAP];
+}
+
+inline void setDrawAddr(uint16_t addr) {
+  screen = &mem[(addr > SCREEN_MEMMAP) ? SCREEN_MEMMAP : addr];
+  if (redrawscreen == screen) {
+    line_draw = &sprite_flags[SPRITE_FLAGS_SIZE];
+  } else {
+    line_draw = &sprite_flags[SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE];    
+  }
+}
+
+inline void resetDrawAddr() {
+  screen = &mem[SCREEN_MEMMAP];
+  line_draw = &sprite_flags[SPRITE_FLAGS_SIZE];
 }
 
 void resetPalette() {
@@ -510,23 +516,23 @@ void redrawScreen() {
     // int yinc = ((y & 7) == 7) ? 1 : 2;
     int yinc = ((y & 1) && (y < 16 || y > 111)) ? 1 : 2;
 
-    if (line_is_draw[y] == 0) {
+    if (line_redraw[y] == 0) {
       ypos += yinc;
       continue;
     }
     // line_is_draw[y] is a bitfield representing 8*2 pixels for each bit
     // find highest and lowest set bits
     // then calculate start and stop bytes (2 pixels)
-    int xstart = pos8bit(lowestbit(line_is_draw[y])) * 8;
-    int xend = (pos8bit(highestbit(line_is_draw[y])) + 1) * 8;
+    int xstart = pos8bit(lowestbit(line_redraw[y])) * 8;
+    int xend = (pos8bit(highestbit(line_redraw[y])) + 1) * 8;
 
     tft.setAddrWindow(DISPLAY_X_OFFSET + (xstart * 4), ypos, DISPLAY_X_OFFSET - 1 + (xend * 4), ypos + yinc);
 
     // Each byte contains two pixels
     int i = 0;
     for(int x = xstart; x < xend; x++){
-        pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_LEFT(screen[SCREEN_ADDR(x,y)])];
-        pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_RIGHT(screen[SCREEN_ADDR(x,y)])];
+        pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_LEFT(redrawscreen[SCREEN_ADDR(x,y)])];
+        pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_RIGHT(redrawscreen[SCREEN_ADDR(x,y)])];
     }
     tft.pushColors(pix_buffer, i);
 
@@ -536,7 +542,7 @@ void redrawScreen() {
 
     ypos += yinc;
   }
-  memset(line_is_draw, 0, 128);
+  memset(line_redraw, 0, 128);
   setRedraw();
 }
 
@@ -560,10 +566,10 @@ void setParticleTime(uint16_t time, uint16_t timediff){
 
 void setEmitter(int16_t gravity, int16_t dir, int16_t dir1, int16_t speed){
   emitter.gravity = coord(gravity);
-  emitter.speedx = coord((speed * getCos(dir)) >> 6);
-  emitter.speedy = coord((speed * getSin(dir)) >> 6);
-  emitter.speedx1 = coord((speed * getCos(dir1)) >> 6);
-  emitter.speedy1 = coord((speed * getSin(dir1)) >> 6);
+  emitter.speedx = coord((speed * getCos(dir)) / 128);
+  emitter.speedy = coord((speed * getSin(dir)) / 128);
+  emitter.speedx1 = coord((speed * getCos(dir1)) / 128);
+  emitter.speedy1 = coord((speed * getSin(dir1)) / 128);
 }
 
 uint16_t makeParticleColor(uint16_t col1, uint16_t col2, uint16_t prefsteps, uint16_t ptype) {
@@ -595,17 +601,14 @@ void drawParticles(int16_t x, int16_t y, uint16_t pcolor, int16_t radpx, int16_t
   else if (radpx > 15) radpx = 15;
   // to enable colorfading without growing
 
-  uint8_t radpt = (pcolor >> 8);
   uint8_t ccolor = (pcolor & 0xff);
-  uint8_t colsteps = radpt & 0xf;
+  uint8_t radpt = (pcolor >> 8) & 0xf0;
+  uint8_t colsteps = (pcolor >> 8) & 0x0f;
   uint8_t radq = 255;
-  if (radpx == 0) {
-    if (colsteps > 1) radq = nearesthibit(((uint16_t)emitter.timeparticle+1) / colsteps)-1;
-    radpt |= PARTICLE_SHRINK;
-  } else {
-    radq = nearesthibit(((uint16_t)emitter.timeparticle+1) / (radpx+1))-1;
-    radpt |= (radpt & PARTICLE_SHRINK) ? radpx : 0;
-  }
+  if (radpx == 0) radpt |= PARTICLE_SHRINK;
+  if (colsteps > 1) radq = nearesthibit(((uint16_t)emitter.timeparticle+1) / colsteps)-1;
+  else radq = nearesthibit(((uint16_t)emitter.timeparticle+1) / (radpx+1))-1;
+  radpt |= (radpt & PARTICLE_SHRINK) ? radpx : 0;
   // create count particles
   if (count > PARTICLE_COUNT) count = PARTICLE_COUNT;
   int n = emitter.nextp;
@@ -664,21 +667,22 @@ void animateParticles(){
         else if ((particles[n].radpt & (PARTICLE_SHRINK | 0xf)) < PARTICLE_SHRINK) particles[n].radpt++;
 
         // cycle color here 
-        particles[n].color = (particles[n].color << 4) | (particles[n].color >> 4);
+        if ((particles[n].color & 0xf) > (particles[n].color >> 4)) particles[n].color -= 1;
+        else if ((particles[n].color & 0xf) < (particles[n].color >> 4)) particles[n].color +=1;
+        // particles[n].color = (particles[n].color << 4) | (particles[n].color >> 4);
       }
 
       if (particles[n].time & 1) {
-        // if (randomD(0,1) == 1) {
         x += particles[n].speedx;
         y += particles[n].speedy;
         if (ptype & PARTICLE_GRAV) particles[n].speedy += emitter.gravity;
       } else {
-        x += particles[n].speedx >> 2;
-        y += particles[n].speedy >> 2;
+        x += particles[n].speedx / 4;
+        y += particles[n].speedy / 4;
       }
       if (ptype & PARTICLE_FRIC) {
-        particles[n].speedx = particles[n].speedx >> 1;
-        particles[n].speedy = particles[n].speedy >> 1;
+        particles[n].speedx = particles[n].speedx / 2;
+        particles[n].speedy = particles[n].speedy / 2;
       }
 
       // delete if outside screen
@@ -701,6 +705,8 @@ int8_t getActorInXY(int16_t x, int16_t y){
   }
   return -1;
 }
+
+#define ACTOR_ONLY_EXIT(i) (actor_table[i].opts_angle & ACTOR_OPT_EXIT_ONLY)
 
 void moveActor(int16_t i) {
   int n = i+1;
@@ -737,8 +743,8 @@ inline void setTile(int16_t x, int16_t y, uint8_t v){
   tile_map[TILEMAP_ADDR(x,y)] = v;
 }
 
-// 000ITBLR 000NNNNN  M00YYYYYEXXXXXXX
-// 000ITBLR 000NNNNN  0000000000IIIII
+// 000ITBLR 000NNNNN   M00YYYYY EXXXXXXX
+// A00ITBLR 000NNNNN   00000000 000IIIII
 
 void testActorCollision(){
   byte n, i;
@@ -884,19 +890,13 @@ void testActorMap(int16_t celx, int16_t cely, int16_t sx, int16_t sy, int16_t tw
 }
 
 inline void clearScr(uint8_t color){
-  /*
-  for(uint8_t y = 0; y < 128; y ++){
-    for(uint8_t x = 0; x < 128; x++)
-      setPix(x, y, color);
-  }
-  */
-  
   uint8_t twocolor = ((drwpalette[color] << 4) | (drwpalette[color] & 0x0f));
   memset(screen, twocolor, SCREEN_SIZE);
-  memset(line_is_draw, 255, 128);
+  memset(line_draw, 255, 128);
   espico.nlregx = 0;
   espico.regx = 0;
   espico.regy = 0;
+  setClip(0,0,128,128);
 }
 
 inline void setImageSize(uint8_t size){
@@ -910,14 +910,14 @@ inline void setActorPosition(int8_t n, int16_t x, int16_t y){
 
 void actorSetDirectionAndSpeed(int8_t n, int16_t speed, int16_t dir){
   // coordshift here?
-  actor_table[n].speedx = ((speed * getCos(dir)) >> 6);
-  actor_table[n].speedy = ((speed * getSin(dir)) >> 6);
+  actor_table[n].speedx = ((speed * getCos(dir)) / 128);
+  actor_table[n].speedy = ((speed * getSin(dir)) / 128);
 }
 
 int16_t angleBetweenActors(int8_t n1, int8_t n2){
   // using fixed points will probably cause overflow and thus requires coord adjustments
   int16_t A = atan2_rb(coord(actor_table[n1].y - actor_table[n2].y), coord(actor_table[n1].x - actor_table[n2].x));
- // A = (A < 0) ? A + 360 : A;
+  // A = (A < 0) ? A + 360 : A;
   return A;
 }
 
@@ -946,6 +946,8 @@ int16_t getActorValue(int8_t n, uint8_t t){
       return actor_table[n].flags;
     case 10:
       return actor_table[n].gravity;
+    case 14:
+      return actor_table[n].opts_angle & 0xFE00;
     case 15:
       return actor_table[n].sprite;
     case 16:
@@ -1000,20 +1002,21 @@ void setActorValue(int8_t n, uint8_t t, int16_t v){
     case 11:
       actor_table[n].oncollision = (uint16_t)v;
       return;
-    case 12:
-      // actor_table[n].onexitscreen = (uint16_t)v;
+    case 14:
+      actor_table[n].opts_angle &= 0x01FF;
+      actor_table[n].opts_angle |= (v & 0xFE00);
       return;
     case 13:
       actor_table[n].onanimate = (uint16_t)v;
       return;
     case 15:
-      actor_table[n].sprite = (v < SPRITE_COUNT) ? v : 0; 
+      actor_table[n].sprite = (v & 0xFF); 
       return;
     case 16:
-      actor_table[n].frame = v; 
+      actor_table[n].frame = v;
       return;
     case 17:
-      actor_table[n].sw = v; 
+      actor_table[n].sw = v;
       return;
     case 18:
       actor_table[n].sh = v; 
@@ -1335,12 +1338,23 @@ void drwLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
 inline void setPixNC(uint8_t x, uint8_t y, uint8_t c){
   uint8_t xi = x / 2;
   uint8_t b = screen[SCREEN_ADDR(xi, y)];
+  uint8_t px = b;
+  if(x & 1)
+    SET_PIX_RIGHT(px, c);
+  else
+    SET_PIX_LEFT(px, c);
+  if(b != px) {
+    screen[SCREEN_ADDR(xi, y)] = px;
+    line_draw[y] |= (1 << (x >> 4));
+  }
+/*
   if(x & 1)
     SET_PIX_RIGHT(screen[SCREEN_ADDR(xi, y)], c);
   else
     SET_PIX_LEFT(screen[SCREEN_ADDR(xi, y)], c);
   if(b != screen[SCREEN_ADDR(xi, y)])
-    line_is_draw[y] |= (1 << (x >> 4));
+    line_redraw[y] |= (1 << (x >> 4));
+*/
 }
 
 inline void setPixWC(int16_t x, int16_t y, uint8_t c){
@@ -1376,8 +1390,8 @@ inline void changePalette(uint8_t n, uint16_t c){
     palette[n] = (uint16_t)pgm_read_word_near(epalette + c);
     for(int y = 0; y < 128; y++){
       for(int x = 0; x < 64; x++){
-        if((GET_PIX_LEFT(screen[SCREEN_ADDR(x, y)]) == n || GET_PIX_RIGHT(screen[SCREEN_ADDR(x, y)]) == n))
-          line_is_draw[y] |= (1 << (x >> 3));
+        if((GET_PIX_LEFT(redrawscreen[SCREEN_ADDR(x, y)]) == n || GET_PIX_RIGHT(redrawscreen[SCREEN_ADDR(x, y)]) == n))
+          line_redraw[y] |= (1 << (x >> 3));
       }
     }
   }
