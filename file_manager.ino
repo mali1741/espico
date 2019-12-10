@@ -1,4 +1,4 @@
-void fileList(String path) {
+void fileList(char *path) {
   Dir dir = SPIFFS.openDir(path);
   char s[32];
   char thisF[32];

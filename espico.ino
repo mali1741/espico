@@ -100,7 +100,7 @@ void coos_cpu(void){
   while(1){
     COOS_DELAY(0);        // 1 ms
     timeR = millis();
-    cpuOPS += cpuRun(1100);   // was 1100 before
+    cpuOPS += cpuRun(1600);   // was 1100 before
     timeCpu += millis() - timeR;
   }
 }
@@ -157,6 +157,12 @@ void pause(){
       }
       thiskey = 0;
       fileList("/games");
+      return;
+    }
+    if((thiskey & KEY_B) && (prevKey != KEY_B)){
+      setRtttlPlay(-1);
+      thiskey = 0;
+      delay(800);
       return;
     }
     prevKey = thiskey;
@@ -226,7 +232,7 @@ void coos_rtttl(void){
       COOS_DELAY(rtttl_delay);
     }
     else {
-      digitalWrite(SOUNDPIN, HIGH);    // turn the LED off by making the voltage LOW
+      digitalWrite(SOUNDPIN, HIGH);    // turn the LED off by making the voltage HIGH
       COOS_DELAY(100);
     }
   }

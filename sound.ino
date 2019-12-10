@@ -32,13 +32,14 @@ struct PLAY_TONE {
 
 struct RTTTL rtttl;
 struct PLAY_TONE play_tone;
+int sound_enabled = 1;
 
 inline void addTone(uint16_t f, uint16_t t){
   play_tone.freq = f;
   play_tone.time = t;
 }
 
-uint8_t loadRtttl(){
+uint16_t loadRtttl(){
   int num;
   char c;
   rtttl.default_dur = 4;
@@ -88,15 +89,6 @@ uint8_t loadRtttl(){
   rtttl.wholenote = (60 * 1000L / (uint32_t)rtttl.bpm) * 4;
   NEXT_CHAR
   rtttl.position = 0;
-  Serial.print(F("loadRttl d="));
-  Serial.print(rtttl.default_dur);
-  Serial.print(F(" o="));
-  Serial.print(rtttl.default_oct);
-  Serial.print(F(" b="));
-  Serial.print(rtttl.bpm);
-  Serial.print(F(" w="));
-  Serial.print(rtttl.wholenote);
-  Serial.println(F(" done"));
   return 1;
 }
 
@@ -105,16 +97,18 @@ void setRtttlAddress(uint16_t adr){
   loadRtttl();
 }
 
-void setRtttlLoop(uint8_t loop){
+void setRtttlLoop(int16_t loop){
   rtttl.loop = loop;
 }
 
-void setRtttlPlay(uint8_t play){
-  if(play == 0)
+void setRtttlPlay(int16_t play){
+  if (play == -1) {
+    sound_enabled = !sound_enabled;
+  } else if (play == 0)
     rtttl.play = 0;
   else if(play == 1)
     rtttl.play = 1;
-  else{
+  else if (play == 2) {
     rtttl.play = 0;
     rtttl.position = 0;
   }
@@ -128,7 +122,7 @@ uint16_t playRtttl(){
   char c;
   //play single tone
   if(play_tone.time){
-    tone(SOUNDPIN, play_tone.freq, play_tone.time);
+    if (sound_enabled) tone(SOUNDPIN, play_tone.freq, play_tone.time);
     num = play_tone.time;
     play_tone.time = 0;
     return num;
@@ -149,14 +143,12 @@ uint16_t playRtttl(){
     num = (num * 10) + (c - '0');
     NEXT_CHAR_IN_P
   }
-  Serial.print(num);
   if(num) 
     duration = rtttl.wholenote / num;
   else 
     duration = rtttl.wholenote / (uint32_t)rtttl.default_dur;  // we will need to check if we are a dotted note after
   //now get the note
   note = 0;
-  Serial.print(c);
   switch(c){
     case 'c':
     case 'C':
@@ -194,20 +186,17 @@ uint16_t playRtttl(){
   NEXT_CHAR_IN_P_END
   // now, get optional '#' sharp
   if(c == '#'){
-    Serial.print(c);
     note++;
     NEXT_CHAR_IN_P_END
   }
   // now, get optional '.' dotted note
   if(c == '.'){
-    Serial.print(c);
     duration += duration/2;
     NEXT_CHAR_IN_P_END
   }
   // now, get scale
   if(isdigit(c)){
     scale = c - '0';
-    Serial.print(scale);
     NEXT_CHAR_IN_P_END
   }
   else{
@@ -215,12 +204,11 @@ uint16_t playRtttl(){
   }
   scale += OCTAVE_OFFSET;
   if(c == ',') {
-    Serial.print(c);
     NEXT_CHAR_IN_P_END       // skip comma for next note (or we may be at the end)
   }
   // now play the note
   if(note){
-    tone(SOUNDPIN, notes[(scale - 4) * 12 + note], duration);
+    if (sound_enabled) tone(SOUNDPIN, notes[(scale - 4) * 12 + note], duration);
   }
   return duration;
 }

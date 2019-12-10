@@ -18,7 +18,7 @@
 #define SPRITE_FLAGS_SIZE 256
 #define SPRITE_ARRAY_DEF SPRITE_MAP_SIZE
 #define SPRITE_ADDR(n)  (((int)(n & 0xf0) << 5) + ((n & 0x0f) << 2))
-#define SPRITE_PIX(x, y) ((int(y) << 6) + (x))
+#define SPRITE_PIX(x, y) ((int(y) << 6) + int(x))
 #define TILEMAP_SIZE 4096
 #define TILEMAP_ADDR(x, y) ((int((y)&31) << 7) + ((x)&127))
 
@@ -34,6 +34,9 @@
 #define PARTICLE_GRAV   0x20
 #define PARTICLE_FRIC   0x40
 #define PARTICLE_STAR   0x80
+
+#define FLIP_Y_ON (espico.imageSize & 0x80)
+#define FLIP_X_ON ((espico.imageSize << 1) & 0x80)
 
 struct EspicoState {
   int8_t   drawing;
@@ -85,7 +88,7 @@ struct Actor {
   int16_t speedy;
 
   int16_t gravity;
-  uint16_t opts_angle;   //  HVEA AAAAAAAA    - bits use: A - angle (0-359) , E - cb_anim on exit only, V - flip vertical, H - flip horizontal 
+  uint16_t opts_angle;   //  XY00 00EA AAAA AAAA    - bits use: A - angle (0-359) , E - cb_anim on exit only, V - flip X, H - flip Y 
 
   uint16_t oncollision;
   uint16_t onanimate;
@@ -453,7 +456,7 @@ void initEspicoState() {
   espico.color = 7;
   espico.bgcolor = 0;
   espico.fillpattern = 0;
-  espico.imageSize = 1;
+  espico.imageSize = 1; 
   espico.nlregx = 0;
   espico.regx = 0;
   espico.regy = 0;
@@ -483,10 +486,10 @@ void setEspicoState(int16_t s, int16_t v) {
 }  
 
 void setClip(int16_t x, int16_t y, int16_t w, int16_t h) {
-   espico.clipx0 = x & 127;
-   espico.clipx1 = (x + w > 128) ? 128 : x+w;
-   espico.clipy0 = y & 127;
-   espico.clipy1 = (y + h > 128) ? 128 : y+h;
+   espico.clipx0 = (x < 0) ? 0 : (x & 127);
+   espico.clipx1 = ((x + w) > 128) ? 128 : (x+w);
+   espico.clipy0 = (y < 0) ? 0 : (y & 127);
+   espico.clipy1 = ((y + h) > 128) ? 128 : (y+h);
 }
 
 inline uint8_t highestbit(uint8_t l) {
@@ -560,8 +563,8 @@ inline uint8_t hibits(uint16_t n) {
 }
 
 void setParticleTime(uint16_t time, uint16_t timediff){
-  emitter.timeparticle = (time <= 10000)?(time / 50):255;
-  emitter.timediff = (time-timediff <= 10000)?((time-timediff)/ 50):255;
+  emitter.timeparticle = (time <= 10000)?(time / 32):255;
+  emitter.timediff = (time-timediff <= 10000)?((time-timediff)/ 32):255;
 }
 
 void setEmitter(int16_t gravity, int16_t dir, int16_t dir1, int16_t speed){
@@ -890,17 +893,26 @@ void testActorMap(int16_t celx, int16_t cely, int16_t sx, int16_t sy, int16_t tw
 }
 
 inline void clearScr(uint8_t color){
-  uint8_t twocolor = ((drwpalette[color] << 4) | (drwpalette[color] & 0x0f));
-  memset(screen, twocolor, SCREEN_SIZE);
-  memset(line_draw, 255, 128);
+  uint8_t twocolor[SCREEN_WIDTH_BYTES];
+  memset(twocolor, ((drwpalette[color] << 4) | (drwpalette[color] & 0x0f)), SCREEN_WIDTH_BYTES);
+  for (int i = 0; i < SCREEN_HEIGHT; i++) {
+    if (memcmp(screen+i*SCREEN_WIDTH_BYTES, twocolor, SCREEN_WIDTH_BYTES) != 0) { 
+      line_draw[i] = 255;
+      memcpy(screen+i*SCREEN_WIDTH_BYTES, twocolor, SCREEN_WIDTH_BYTES);
+    }
+  }
   espico.nlregx = 0;
   espico.regx = 0;
   espico.regy = 0;
   setClip(0,0,128,128);
 }
 
+inline void setImageFlipXY(uint8_t fxy) {
+  espico.imageSize = ((espico.imageSize & 0x1f) | (fxy & 0xe0));
+}
+
 inline void setImageSize(uint8_t size){
-  espico.imageSize = size;
+  espico.imageSize = ((espico.imageSize & 0xe0) | (size & 0x1f));
 }
 
 inline void setActorPosition(int8_t n, int16_t x, int16_t y){
@@ -1042,17 +1054,19 @@ void drawActor(int8_t i) {
 
 #define IS_TRANSPARENT(col) (espico.palt & (1 << col))
 
-void drawImgP(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_next_row, int xissafe, int yissafe){
+void drawImgFlipXSafe(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_next_row, int xissafe, int yissafe){
   uint8_t p, color;
   int add_x = 0, firstx = 0;
   int16_t xi = 0;
+  a += (w >> 1) - 1; // end if image row
   if (!yissafe) {
     if (y < espico.clipy0) {
-      a += (w/2 + add_next_row) * (espico.clipy0 - y);
+      a += (add_next_row - w/2) * (espico.clipy0 - y); 
       h = h - (espico.clipy0 - y);
       y = espico.clipy0;
     }
-    if (h > 0) h = ((espico.clipy1-y) < h) ? (espico.clipy1 - y) : h;
+    h = ((espico.clipy1-y) < h) ? (espico.clipy1 - y) : h;
+    if (h <= 0) return;
   }
   if (!xissafe) {
     if (x < espico.clipx0) {
@@ -1062,13 +1076,71 @@ void drawImgP(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_nex
       add_x >>= 1;
       x = espico.clipx0;
     }
-    if (w > 0 && (espico.clipx1-x) < w) {
+    if ((espico.clipx1-x) < w) {
+      // fe1 | -|-- | fs1
+      // fe2 | -|-- | fs2
+      // 64 + w2 + v2
+      add_next_row -= (w-(espico.clipx1 - x))/2;
+      w = (espico.clipx1 - x);
+    }
+    if (w <= 0) return;
+  }
+  for(int16_t yi = 0; yi < h; yi++) {
+    a -= add_x;
+    if (firstx) {
+      p = readMem(a--);
+      color = GET_PIX_LEFT(p);
+      if(!IS_TRANSPARENT(color)){
+        setPixNC(x, yi + y, drwpalette[color]);
+      }
+      xi = 1;
+    } else {
+      xi = 0;
+    }
+      for(; xi < w; xi++){
+        p = readMem(a--);
+        color = GET_PIX_RIGHT(p);
+        if(!IS_TRANSPARENT(color)){
+            setPixNC(xi + x, yi + y, drwpalette[color]);
+        }
+        xi++;
+        if (xi < w) {
+          color = GET_PIX_LEFT(p);
+          if(!IS_TRANSPARENT(color)){
+            setPixNC(xi + x, yi + y, drwpalette[color]);
+          }
+        }
+      }
+    a += add_next_row;
+  }
+}
+
+void drawImgSafe(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_next_row, int xissafe, int yissafe){
+  uint8_t p, color;
+  int add_x = 0, firstx = 0;
+  int16_t xi = 0;
+  if (!yissafe) {
+    if (y < espico.clipy0) {
+      a += (w/2 + add_next_row) * (espico.clipy0 - y);
+      h = h - (espico.clipy0 - y);
+      y = espico.clipy0;
+    }
+    h = ((espico.clipy1-y) < h) ? (espico.clipy1 - y) : h;
+    if (h <= 0) return;
+  }
+  if (!xissafe) {
+    if (x < espico.clipx0) {
+      add_x = (espico.clipx0 - x);
+      w = w - add_x;
+      firstx = (add_x & 1);
+      add_x >>= 1;
+      x = espico.clipx0;
+    }
+    if ((espico.clipx1-x) < w) {
       add_next_row += (w-(espico.clipx1 - x))/2;
       w = (espico.clipx1 - x);
     }
-    if (w < 1) {
-      firstx = 0;
-    }
+    if (w <= 0) return;
   }
   for(int16_t yi = 0; yi < h; yi++) {
     a += add_x;
@@ -1100,26 +1172,38 @@ void drawImgP(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_nex
   }
 }
 
-void drawImg(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h){
+#define ZOOM_IMG_SIZE (espico.imageSize & 0x1f)
+
+void drawImg(int16_t adr, int16_t x, int16_t y, int16_t w, int16_t h){
   int add_next_row = 0;
-  if (a >= PRG_SIZE) {
+  if (adr >= PRG_SIZE) {
     add_next_row = 64 - (w >> 1);
   }
-  if(espico.imageSize > 1){
-    drawImgS(a, x, y, w, h, add_next_row);
+  if (FLIP_Y_ON) adr += (add_next_row + (w >> 1)) * (h-1);
+  if (FLIP_Y_ON ^ FLIP_X_ON) {
+    add_next_row += (w >> 1)*2;
+  }
+  if (FLIP_Y_ON) {
+    add_next_row = -add_next_row;
+  }
+
+  if(ZOOM_IMG_SIZE > 1){
+    if (FLIP_X_ON) drawImgFlipXSize(adr, x, y, w, h, add_next_row);
+    else drawImgSize(adr, x, y, w, h, add_next_row);
   } else {
     x -= espico.camx;
     y -= espico.camy;
     if (x + w > espico.clipx0 && x < espico.clipx1) {
       int xissafe = (x >= espico.clipx0 && x + w <= espico.clipx1);
       int yissafe = (y >= espico.clipy0 && y + h <= espico.clipy1);
-      drawImgP(a, x, y, w, h, add_next_row,xissafe,yissafe);
+      if (FLIP_X_ON) drawImgFlipXSafe(adr, x, y, w, h, add_next_row,xissafe,yissafe); 
+      else drawImgSafe(adr, x, y, w, h, add_next_row,xissafe,yissafe);
     }
   }
 }
 
 void drawImageBit(int16_t adr, int16_t x1, int16_t y1, int16_t w, int16_t h){
-  if(espico.imageSize > 1){
+  if(ZOOM_IMG_SIZE > 1){
     drawImageBitS(adr, x1, y1, w, h);
     return;
   }
@@ -1158,11 +1242,52 @@ void drawImageBit(int16_t adr, int16_t x1, int16_t y1, int16_t w, int16_t h){
   }
 }
 
-void drawImgS(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_next_row){
+void drawImgFlipXSize(int16_t adr, int16_t x, int16_t y, int16_t w, int16_t h, int add_next_row){
   x -= espico.camx;
   y -= espico.camy;
   uint8_t p, color;
-  const uint8_t s = espico.imageSize;
+  const uint8_t s = ZOOM_IMG_SIZE;
+  const int16_t ws = w * s;
+  const int16_t w1 = (w & 1);
+  const int16_t hs = h * s;
+
+  if (x + ws > espico.clipx0 && x < espico.clipx1) {
+  int xissafe = (x >= espico.clipx0 && x + ws <= espico.clipx1);
+  int yissafe = (y >= espico.clipy0 && y + hs <= espico.clipy1);
+
+  adr += (w >> 1) - 1;
+  for(int16_t yi = 0; yi < hs; yi += s) {
+    for(int16_t xi = 0; xi < ws; xi += s){
+      p = readMem(adr--);
+      color = GET_PIX_RIGHT(p);
+      if(!IS_TRANSPARENT(color)){
+        for(int jy = 0; jy < s; jy++)
+         if(yissafe || (y+yi+jy >= espico.clipy0 && y+yi+jy < espico.clipy1))
+          for(int jx = 0; jx < s; jx++)
+            if(xissafe || (xi+x+jx >= espico.clipx0 && xi+x+jx < espico.clipx1))
+              setPixNC(x + xi + jx, y + yi + jy, drwpalette[color]);
+      }
+      xi += s;
+      color = GET_PIX_LEFT(p);
+      if(!IS_TRANSPARENT(color)){
+        for(int jy = 0; jy < s; jy++)
+         if(yissafe || (y+yi+jy >= espico.clipy0 && y+yi+jy < espico.clipy1))
+          for(int jx = 0; jx < s; jx++)
+            if(xissafe || (xi+x+jx >= espico.clipx0 && xi+x+jx < espico.clipx1))
+              setPixNC(x + xi + jx, y + yi + jy, drwpalette[color]);
+      }
+    }
+    adr += add_next_row;
+  }
+  
+  }
+}
+
+void drawImgSize(int16_t adr, int16_t x, int16_t y, int16_t w, int16_t h, int add_next_row){
+  x -= espico.camx;
+  y -= espico.camy;
+  uint8_t p, color;
+  const uint8_t s = ZOOM_IMG_SIZE;
   const int16_t ws = w * s;
   const int16_t w1 = (w & 1);
   const int16_t hs = h * s;
@@ -1173,7 +1298,7 @@ void drawImgS(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_nex
 
   for(int16_t yi = 0; yi < hs; yi += s) {
     for(int16_t xi = 0; xi < ws; xi += s){
-      p = readMem(a);
+      p = readMem(adr);
       color = GET_PIX_LEFT(p);
       if(!IS_TRANSPARENT(color)){
         for(int jy = 0; jy < s; jy++)
@@ -1191,9 +1316,9 @@ void drawImgS(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_nex
             if(xissafe || (xi+x+jx >= espico.clipx0 && xi+x+jx < espico.clipx1))
               setPixNC(x + xi + jx, y + yi + jy, drwpalette[color]);
       }
-      a++;
+      adr++;
     }
-    a += add_next_row;
+    adr += add_next_row;
   }
   
   }
@@ -1202,7 +1327,7 @@ void drawImgS(int16_t a, int16_t x, int16_t y, int16_t w, int16_t h, int add_nex
 void drawImageBitS(int16_t adr, int16_t x1, int16_t y1, int16_t w, int16_t h){
   x1 -= espico.camx;
   y1 -= espico.camy;
-  const uint8_t s = espico.imageSize;
+  const uint8_t s = ZOOM_IMG_SIZE;
   const int16_t ws = w * s;
   if (x1 + ws > espico.clipx0 && x1 < espico.clipx1) {
 
@@ -1241,12 +1366,13 @@ void drawTileMap(int16_t celx, int16_t cely, int16_t xx, int16_t yy, int16_t cel
     xx -= espico.camx;
     yy -= espico.camy;
 
+    // int scx = 0;
+    // int scy = 0;
+
     int scx = (espico.clipx0-xx)/8;
     int scy = (espico.clipy0-yy)/8;
     if (scx < 0) scx = 0;
-    else celw -= scx;
     if (scy < 0) scy = 0;
-    else celh -= scy;
 
     int ew = (espico.clipx1-xx)/8 + 1;
     if (ew < celw) celw = ew;
@@ -1263,7 +1389,7 @@ void drawTileMap(int16_t celx, int16_t cely, int16_t xx, int16_t yy, int16_t cel
         spr = getTile((celx+x), (cely+y));
         if (spr != 0) {
           if ((sprite_flags[spr] & layer) == layer) {
-            drawImgP(SPRITE_MEMMAP+SPRITE_ADDR(spr), nx, ny, 8, 8, add_next_row, xissafe, yissafe);
+            drawImgSafe(SPRITE_MEMMAP+SPRITE_ADDR(spr), nx, ny, 8, 8, add_next_row, xissafe, yissafe);
           }
         } else if (espico.palt == 0) {
           for(int16_t jy = 0; jy < 8; jy++)
@@ -1357,6 +1483,18 @@ inline void setPixNC(uint8_t x, uint8_t y, uint8_t c){
 */
 }
 
+inline void setSpritePix(uint8_t x, uint8_t y, uint8_t c){
+  if (x < 128 && y < 128) {
+    uint8_t xi = x / 2;
+    uint8_t px = sprite_map[SPRITE_PIX(xi, y)];
+    if(x & 1)
+      SET_PIX_RIGHT(px, c);
+    else
+      SET_PIX_LEFT(px, c);
+    sprite_map[SPRITE_PIX(xi, y)] = px;
+  }
+}
+
 inline void setPixWC(int16_t x, int16_t y, uint8_t c){
   if(x >= espico.clipx0 && x < espico.clipx1 && y >= espico.clipy0 && y < espico.clipy1){
     setPixNC(x,y,c);
@@ -1373,10 +1511,22 @@ inline byte getPix(byte x, byte y){
   byte b = 0;
   byte xi = x / 2;
   if(x < 128 && y < 128){
-    if(x % 2 == 0)
-      b = GET_PIX_LEFT(screen[SCREEN_ADDR(xi, y)]);
-    else
+    if(x & 1)
       b = GET_PIX_RIGHT(screen[SCREEN_ADDR(xi, y)]);
+    else
+      b = GET_PIX_LEFT(screen[SCREEN_ADDR(xi, y)]);
+  }
+  return b;
+}
+
+inline byte getSpritePix(byte x, byte y){
+  byte b = 0;
+  byte xi = x / 2;
+  if(x < 128 && y < 128){
+    if(x & 1)
+      b = GET_PIX_RIGHT(sprite_map[SPRITE_PIX(xi, y)]);
+    else
+      b = GET_PIX_LEFT(sprite_map[SPRITE_PIX(xi, y)]);
   }
   return b;
 }

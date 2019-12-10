@@ -13,7 +13,7 @@ int32_t n = 0;
 int32_t shadow_n = 0;
 byte redraw = 0;
 uint16_t ticks = 0;
-String s_buffer;
+char s_buffer[16];
 
 struct Fifo_t {
   uint16_t el[FIFO_MAX_SIZE];
@@ -438,6 +438,7 @@ void cpuStep(){
           pc += 2;
           break;
         case 0x88:
+        {
           // MEMSET R             88 0R
           // MEMCPY R             88 1R
           reg1 = (op2 & 0xf0);
@@ -454,6 +455,24 @@ void cpuStep(){
               if (ptr2 + numb > 0x8000) numb = 0x8000 - ptr2;
               memcpy(&mem[ptr1], &mem[ptr2], numb);
             }
+        }
+          break;
+        case 0x8C:
+          {// MEMCONV R             8C 0R
+          reg1 = (op2 & 0xf0);
+          reg2 = (op2 & 0x0f);
+          if (reg1 == 0x00) {
+            adr = reg[reg2];
+            uint16_t ptr1 = (readInt(adr + 4) & 0x7fff);
+            uint16_t ptr2 = (readInt(adr + 2) & 0x7fff);
+            uint16_t numb = readInt(adr);
+            if (numb > 0x8000) numb = 0x8000;
+            if (ptr1 + numb > 0x8000) numb = 0x8000 - ptr1;
+            if (ptr2 + 256 > 0x8000) break;
+            for(int i = 0; i < numb; i++)
+              mem[ptr1+i] = mem[ptr2+mem[ptr1+i]];
+          }
+          }
           break;
       }
       break;
@@ -822,6 +841,12 @@ void cpuStep(){
           }
           reg[reg2] = toInt16(n);
           break;
+        case 0xCA:
+          // ATAN2 R,R   CA RR
+          reg1 = (op2 & 0xf0) >> 4;//y
+          reg2 = op2 & 0xf;//x
+          n = reg[reg1] = atan2_rb(reg[reg1], reg[reg2]);
+          break;
       }
       break;
     case 0xD:
@@ -868,11 +893,12 @@ void cpuStep(){
               //PUTN R D12R
               reg1 = (op2 & 0xf);
               if(reg[reg1] < 32768)
-                s_buffer = String(reg[reg1]);
+                itoa(reg[reg1], s_buffer, 10);
               else
-                s_buffer = String(reg[reg1] - 0x10000);
-              for(j = 0; j < s_buffer.length(); j++){
-                printc(s_buffer[j]);
+                itoa(reg[reg1]-0x10000, s_buffer, 10);
+              j = 0;
+              while (s_buffer[j]){
+                printc(s_buffer[j++]);
               }
               break;
             case 0x30:
@@ -888,7 +914,7 @@ void cpuStep(){
             case 0x50:
               //CLIP R      D15R
               reg1 = (op2 & 0xf);
-	            adr = reg[reg1];
+	      adr = reg[reg1];
               setClip(readInt(adr+6), readInt(adr+4), readInt(adr+2), readInt(adr));
               break;
             case 0xA0:
@@ -899,6 +925,33 @@ void cpuStep(){
                 resetDrawAddr();
               } else {
                 setDrawAddr(reg[reg1]);
+              }
+              break;
+            case 0xB0:
+              //PUTRES X                      D1BX
+              {
+              const int8_t deci[] = {0,1,2,3,3,3, 3,3,3,3,3, 4,4,5,5,5};
+              reg1 = (op2 & 0xf);
+              int16_t numi = toInt16(n);
+              if (numi < 0) {
+                printc('-');
+		            numi = 0 - numi;
+              }
+              itoa(numi >> reg1, s_buffer, 10);
+              j = 0;
+              while (s_buffer[j]) {
+                printc(s_buffer[j++]);
+              }
+              if (reg1 > 0) {
+                const uint16_t fracmask = (1 << reg1) - 1; 
+                int32_t numf = numi; 
+                printc('.');
+		            for(int j = 0; j < deci[reg1]; j++) {
+                  numf &= fracmask;
+                  numf *= 10;
+                  printc((uint8_t)(numf >> reg1) + '0');
+                }
+              }
               }
               break;
             case 0xD0:
@@ -952,7 +1005,7 @@ void cpuStep(){
           // PPIX R,R   D3RR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
-          setPix(reg[reg1], reg[reg2], espico.color);
+          setPix(reg[reg1], reg[reg2], drwpalette[espico.color]);
           break;
         case 0xD4:
           switch(op2 & 0xf0){
@@ -983,9 +1036,10 @@ void cpuStep(){
                 n = reg[reg1] = espico.bgcolor;
                 break;
               case 0x50:
-               // ISIZE      D45R
+                // IMOPTS       D45R
                 reg1 = op2 & 0xf;
-                setImageSize(reg[reg1] & 31);
+                if (reg[reg1] & 31) setImageSize(reg[reg1] & 31);
+		            setImageFlipXY(reg[reg1]);
                 break;
               case 0x60:
                 // DLINE      D46R
@@ -1100,10 +1154,10 @@ void cpuStep(){
             }
             break;
         case 0xD8:
-          // SCROLL R,R   D8RR  disabled in espico
-          reg1 = (op2 & 0xf0) >> 4;//step
-          reg2 = op2 & 0xf;//direction
-          // scrollScreen(1, reg[reg2]);
+          // SGET R,R   D8 RR
+          reg1 = (op2 & 0xf0) >> 4;//x
+          reg2 = op2 & 0xf;//y
+          n = reg[reg1] = getSpritePix(reg[reg1], reg[reg2]);
           break;
         case 0xD9:
           // GETPIX R,R   D9RR
@@ -1112,10 +1166,10 @@ void cpuStep(){
           n = reg[reg1] = getPix(reg[reg1], reg[reg2]);
           break;
         case 0xDA:
-          // ATAN2 R,R   DA RR
-          reg1 = (op2 & 0xf0) >> 4;//y
-          reg2 = op2 & 0xf;//x
-          n = reg[reg1] = atan2_rb(reg[reg1], reg[reg2]);
+          // SSET R,R   DA RR
+          reg1 = (op2 & 0xf0) >> 4;//x
+          reg2 = op2 & 0xf;//y
+          setSpritePix(reg[reg1], reg[reg2], drwpalette[espico.color]);
           break;
         case 0xDB:
           // GACTXY R,R   D8 RR
