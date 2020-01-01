@@ -41,6 +41,53 @@ void geti2cAdress(){
   }
 }
 
+#ifdef ESPBOY
+void scani2c(){
+  byte error, address;
+  int nDevices;
+  nDevices = 0;
+  for(address = 1; address < 127; address++ ){
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+    if (error == 0){
+      Serial.print(F("I2C device found at address 0x"));
+      if (address<16)
+        Serial.print(F("0"));
+      Serial.print(address,HEX);
+      Serial.println(F("  !"));
+      nDevices++;
+    }
+    else if (error==4){
+      Serial.print(F("Unknown error at address 0x"));
+      if (address<16)
+        Serial.print(F("0"));
+      Serial.println(address,HEX);
+    }
+  }
+  if (nDevices == 0)
+    Serial.println(F("No I2C devices found\n"));
+}
+
+void getKey(){
+  thiskey = 0;
+  if(!mcp.digitalRead(0))
+     thiskey |= KEY_A;
+  if(!mcp.digitalRead(1))
+     thiskey |= KEY_SELECT;
+  if(!mcp.digitalRead(2))
+     thiskey |= KEY_START;
+  if(!mcp.digitalRead(3))
+     thiskey |= KEY_B;
+  if(!mcp.digitalRead(4))
+     thiskey |= KEY_UP;
+  if(!mcp.digitalRead(5))
+     thiskey |= KEY_DOWN;
+  if(!mcp.digitalRead(6))
+     thiskey |= KEY_LEFT;
+  if(!mcp.digitalRead(7))
+     thiskey |= KEY_RIGHT;
+}
+#else
 void getKey(){
   byte dio_in;
   Wire.beginTransmission(i2c_adress);
@@ -67,5 +114,6 @@ void getKey(){
   if((dio_in & 1) == 0)
     thiskey |= KEY_LEFT;
 }
+#endif
 
 #endif

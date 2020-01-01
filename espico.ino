@@ -5,12 +5,28 @@
 #include "acoos.h"
 #include <FS.h>
 #include "keys.h"
+// #define ESPBOY
+#ifdef ESPBOY
+  #define APSSID "ESPboy"
+  #define APHOST "espboy"
+  #define APPSK  "87654321"
+  #define MCP4725address  0x60
+  #define MCP23017address 0
+  #define csTFTMCP23017pin 8
+  #define LEDquantity     1
+  #define LEDPIN         D4
+  #define SOUNDPIN       D3
 
-#define APSSID "espico"
-#define APHOST "espico"
-#define APPSK  "87654321"
-#define SOUNDPIN       2
-#define DEBUG_ON_SCREEN
+  #include <Adafruit_MCP23017.h>
+  #include <Adafruit_MCP4725.h>
+  #include <FastLED.h>
+#else
+  #define APSSID "espico"
+  #define APHOST "espico"
+  #define APPSK  "87654321"
+  #define SOUNDPIN       2
+  #define DEBUG_ON_SCREEN
+#endif
 
 // #define DISPLAY_X_OFFSET 12
 #define INFO_RIGHT
@@ -27,6 +43,12 @@ ADC_MODE(ADC_VCC);
 
 // Use hardware SPI
 TFT_eSPI tft = TFT_eSPI();
+#ifdef ESPBOY
+Adafruit_MCP23017 mcp;
+Adafruit_MCP4725 dac;
+CRGB leds[1];
+#endif
+
 #define RAM_SIZE 32 * 1024
 #define PRG_SIZE 16 * 1024
 
@@ -245,8 +267,36 @@ void setup() {
   delay(1);                                // give RF section time to shutdown
   system_update_cpu_freq(FREQUENCY);
   // ------------------end ESP8266'centric------------------------------------
+#ifdef ESPBOY
+  Wire.begin();
+  Serial.println();
+  Serial.println(F("ESPboy"));
+  scani2c();
+  //DAC init
+  dac.begin(MCP4725address);
+  delay(100);
+  dac.setVoltage(0, true);
+  //buttons on mcp23017 init
+  mcp.begin(MCP23017address);
+  delay (100);
+  for(int i = 0; i < 8; i++){
+     mcp.pinMode(i, INPUT);
+     mcp.pullUp(i, HIGH);
+  }
+  FastLED.addLeds<WS2812B, LEDPIN, RGB>(leds, 1);
+  leds[0] = CRGB::Black;
+  FastLED.show();
+  FastLED.show();
+  delay(50);
+  //initialize LCD
+  mcp.pinMode(csTFTMCP23017pin, OUTPUT);
+  mcp.digitalWrite(csTFTMCP23017pin, LOW);
+  tft.init();
+  tft.setRotation(0);
+#else
   tft.init();            // initialize LCD
   tft.setRotation(3);
+#endif
   tft.fillScreen(0x0000);
   tft.setTextSize(1);
   tft.setTextColor(0xffff);

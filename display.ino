@@ -1,6 +1,11 @@
 #include "font_a.c"
 
+#ifdef ESPBOY
+#define DISPLAY_X_OFFSET 0
+#else
 #define DISPLAY_X_OFFSET 12
+#endif
+
 #define SCREEN_WIDTH 128
 #define SCREEN_WIDTH_BYTES 64
 #define SCREEN_HEIGHT 128
@@ -529,21 +534,32 @@ void redrawScreen() {
     int xstart = pos8bit(lowestbit(line_redraw[y])) * 8;
     int xend = (pos8bit(highestbit(line_redraw[y])) + 1) * 8;
 
+#ifdef ESPBOY
+    tft.setAddrWindow(DISPLAY_X_OFFSET + (xstart * 2), y, DISPLAY_X_OFFSET - 1 + (xend * 2), y);
+#else
     tft.setAddrWindow(DISPLAY_X_OFFSET + (xstart * 4), ypos, DISPLAY_X_OFFSET - 1 + (xend * 4), ypos + yinc);
+#endif
 
     // Each byte contains two pixels
     int i = 0;
     for(int x = xstart; x < xend; x++){
+#ifdef ESPBOY
+        pix_buffer[i++] = palette[GET_PIX_LEFT(redrawscreen[SCREEN_ADDR(x,y)])];
+        pix_buffer[i++] = palette[GET_PIX_RIGHT(redrawscreen[SCREEN_ADDR(x,y)])];
+#else
         pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_LEFT(redrawscreen[SCREEN_ADDR(x,y)])];
         pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_RIGHT(redrawscreen[SCREEN_ADDR(x,y)])];
+#endif
     }
     tft.pushColors(pix_buffer, i);
 
+#ifndef ESPBOY
     // double line? then push again
     if (yinc == 2)
       tft.pushColors(pix_buffer, i);
 
     ypos += yinc;
+#endif
   }
   memset(line_redraw, 0, 128);
   setRedraw();
