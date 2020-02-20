@@ -11,7 +11,7 @@ uint16_t pc = 0;
 uint16_t interrupt = 0;
 int32_t n = 0;
 int32_t shadow_n = 0;
-byte redraw = 0;
+volatile byte redraw = 0;
 uint16_t ticks = 0;
 char s_buffer[16];
 
@@ -90,7 +90,10 @@ void cpuInit(){
   }
   interrupt = 0;
   fifoClear();
+  // LOCK_DRAWING();
   display_init();
+  redraw = 0;
+  // UNLOCK_DRAWING();
   reg[0] = PRG_SIZE - 1;//stack pointer
   setCharX(0);
   setCharY(0);
@@ -159,6 +162,18 @@ inline byte readMem(uint16_t adr){
 inline void setRedraw(){
   redraw = 1;
 }
+
+inline byte getRedraw(){
+  if (redraw) {
+    // LOCK_DRAWING();
+    redraw = 0;
+    // memset(line_redraw, 0, 128);
+    // UNLOCK_DRAWING();
+    return 1;
+  }
+  return 0;
+}
+
 
 /*
 inline int16_t setFlags(int32_t n){
@@ -358,7 +373,12 @@ void cpuStep(){
           //FLIP      5050
           if (op2 == 0x50) {
             if (redraw) {
+            // LOCK_DRAWING();
               redraw = 0;
+                // memset(line_redraw, 0, 128);
+
+            // UNLOCK_DRAWING();
+              // memset(line_redraw, 0, 128);
               break;
             }
             // disable cpuRun
@@ -383,7 +403,13 @@ void cpuStep(){
           // EPSTAT R   55XR
           reg1 = (op2 & 0xf0) >> 4;
           reg2 = op2 & 0xf;
-          setEspicoState(reg1,reg[reg2]);
+          if (reg1 == 0 ) {
+            // LOCK_DRAWING();
+            setEspicoState(reg1,reg[reg2]);
+            // UNLOCK_DRAWING();
+          } else {
+            setEspicoState(reg1,reg[reg2]);
+          }
           break;
       }
       break;

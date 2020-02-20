@@ -104,11 +104,16 @@ void setRtttlLoop(int16_t loop){
 void setRtttlPlay(int16_t play){
   if (play == -1) {
     sound_enabled = !sound_enabled;
-  } else if (play == 0)
+    if (!sound_enabled) SOUND_OFF();
+  } else if (play == 0) {
     rtttl.play = 0;
-  else if(play == 1)
+    SOUND_OFF();
+  } else if(play == 1) {
     rtttl.play = 1;
-  else if (play == 2) {
+#ifdef _ODROID_GO_H_
+    if (sound_enabled) GO.Speaker.setVolume(11);
+#endif
+  } else if (play == 2) {
     rtttl.play = 0;
     rtttl.position = 0;
   }
@@ -122,7 +127,7 @@ uint16_t playRtttl(){
   char c;
   //play single tone
   if(play_tone.time){
-    if (sound_enabled) tone(SOUNDPIN, play_tone.freq, play_tone.time);
+    if (sound_enabled) es_tone(play_tone.freq, play_tone.time);
     num = play_tone.time;
     play_tone.time = 0;
     return num;
@@ -208,7 +213,7 @@ uint16_t playRtttl(){
   }
   // now play the note
   if(note){
-    if (sound_enabled) tone(SOUNDPIN, notes[(scale - 4) * 12 + note], duration);
+    if (sound_enabled) es_tone(notes[(scale - 4) * 12 + note], duration);
   }
   return duration;
 }

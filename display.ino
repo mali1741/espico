@@ -195,14 +195,18 @@ uint8_t *screen __attribute__ ((aligned));
 uint8_t *tile_map __attribute__ ((aligned));
 uint8_t *sprite_map __attribute__ ((aligned));
 
-uint8_t sprite_flags[SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE+LINE_REDRAW_SIZE] __attribute__ ((aligned));
-uint8_t *line_redraw __attribute__ ((aligned)) = &sprite_flags[SPRITE_FLAGS_SIZE];
-uint8_t *line_draw __attribute__ ((aligned)) = &sprite_flags[SPRITE_FLAGS_SIZE];
+// uint8_t sprite_flags[SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE+LINE_REDRAW_SIZE] __attribute__ ((aligned));
+// uint8_t *line_redraw __attribute__ ((aligned)) = &sprite_flags[SPRITE_FLAGS_SIZE];
+// uint8_t *line_draw __attribute__ ((aligned)) = &sprite_flags[SPRITE_FLAGS_SIZE];
+
+uint8_t *sprite_flags __attribute__ ((aligned));
+uint8_t *line_redraw __attribute__ ((aligned));
+uint8_t *line_draw __attribute__ ((aligned));
 
 struct Actor actor_table[32] __attribute__ ((aligned));
 struct Particle particles[PARTICLE_COUNT] __attribute__ ((aligned));
 struct Emitter emitter __attribute__ ((aligned));
-struct EspicoState espico __attribute__ ((aligned));
+volatile struct EspicoState espico __attribute__ ((aligned));
 uint16_t frame_count = 0; 
 // uint16_t seqr __attribute__ ((aligned)) = 1; 
 
@@ -380,7 +384,8 @@ int16_t atan2_fp(int16_t y_fp, int16_t x_fp){
 }
 */
 void memoryAlloc(){
-  mem = (uint8_t*)malloc(RAM_SIZE);
+  // mem = (uint8_t*)malloc(RAM_SIZE);
+  mem = (uint8_t*)malloc(RAM_SIZE+SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE+LINE_REDRAW_SIZE);
   if(mem == NULL) {
     Serial.println(F("Out of memory"));
     return;
@@ -389,20 +394,25 @@ void memoryAlloc(){
   screen = &mem[SCREEN_MEMMAP];
   tile_map = &mem[TILE_MEMMAP];
   sprite_map = &mem[SPRITE_MEMMAP];
+  
+  sprite_flags = &mem[RAM_SIZE];
+  line_redraw = &sprite_flags[SPRITE_FLAGS_SIZE];
+  line_draw = line_redraw;
 }
 
 inline void setDrawAddr(uint16_t addr) {
   screen = &mem[(addr > SCREEN_MEMMAP) ? SCREEN_MEMMAP : addr];
   if (redrawscreen == screen) {
-    line_draw = &sprite_flags[SPRITE_FLAGS_SIZE];
+    line_draw = line_redraw;
   } else {
-    line_draw = &sprite_flags[SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE];    
+    line_draw = &sprite_flags[SPRITE_FLAGS_SIZE+LINE_REDRAW_SIZE];
+    // memset(line_draw, 0, LINE_REDRAW_SIZE);    
   }
 }
 
 inline void resetDrawAddr() {
-  screen = &mem[SCREEN_MEMMAP];
-  line_draw = &sprite_flags[SPRITE_FLAGS_SIZE];
+  screen = redrawscreen;
+  line_draw = line_redraw;
 }
 
 void resetPalette() {
@@ -446,13 +456,16 @@ void resetActor(int16_t n) {
 }
 
 void display_init(){
+  resetDrawAddr();
   initEspicoState();
   resetPalette();
   resetActor(-1);
   // emitter.time = 0;
   for(int i = 0; i < PARTICLE_COUNT; i++)
     particles[i].time = 0;
-  clearScr(0);
+  // reset screen redraw
+  memset(line_redraw, 255, LINE_REDRAW_SIZE);
+  // memset(screen, 0, SCREEN_WIDTH_BYTES*SCREEN_HEIGHT);
 }
 
 void initEspicoState() {
@@ -497,6 +510,13 @@ void setClip(int16_t x, int16_t y, int16_t w, int16_t h) {
    espico.clipy1 = ((y + h) > 128) ? 128 : (y+h);
 }
 
+inline uint8_t setlower8bits(uint16_t n){
+  n |= (n >>  1);
+  n |= (n >>  2);
+  n |= (n >>  4);
+  return (n & 0xff);
+}
+
 inline uint8_t highestbit(uint8_t l) {
   l = setlower8bits(l);
   return (l - (l >> 1));
@@ -514,8 +534,21 @@ inline int pos8bit(uint8_t b) {
   return p;
 }
 
+#ifdef _ODROID_GO_H_
+inline void pushPixels(int num) {
+  tft.startWrite();
+  tft.writePixels(pix_buffer, num);
+  tft.endWrite();
+}
+#else
+inline void pushPixels(int num) {
+  tft.pushColors(pix_buffer, num);
+}
+#endif
+
 void redrawScreen() {
   int ypos = 0;
+  uint8_t line_is_drawn = 0;
   if (espico.drawing) return;
   cadr_count++;
   frame_count++;
@@ -524,24 +557,32 @@ void redrawScreen() {
     // int yinc = ((y & 7) == 7) ? 1 : 2;
     int yinc = ((y & 1) && (y < 16 || y > 111)) ? 1 : 2;
 
-    if (line_redraw[y] == 0) {
+    line_is_drawn = line_redraw[y];
+    if (line_is_drawn == 0) {
       ypos += yinc;
       continue;
     }
+    // reset line (in uncached multi-cpu this would probably save some bits from clearing)
+    line_redraw[y] ^= line_is_drawn;
     // line_is_draw[y] is a bitfield representing 8*2 pixels for each bit
     // find highest and lowest set bits
     // then calculate start and stop bytes (2 pixels)
-    int xstart = pos8bit(lowestbit(line_redraw[y])) * 8;
-    int xend = (pos8bit(highestbit(line_redraw[y])) + 1) * 8;
+    int xstart = pos8bit(lowestbit(line_is_drawn)) * 8;
+    int xend = (pos8bit(highestbit(line_is_drawn)) + 1) * 8;
 
 #ifdef ESPBOY
-    tft.setAddrWindow(DISPLAY_X_OFFSET + (xstart * 2), y, DISPLAY_X_OFFSET - 1 + (xend * 2), y);
+    tft.setWindow(DISPLAY_X_OFFSET + (xstart * 2), y, DISPLAY_X_OFFSET - 1 + (xend * 2), y);
 #else
-    tft.setAddrWindow(DISPLAY_X_OFFSET + (xstart * 4), ypos, DISPLAY_X_OFFSET - 1 + (xend * 4), ypos + yinc);
+    tft.setWindow(DISPLAY_X_OFFSET + (xstart * 4), ypos, DISPLAY_X_OFFSET - 1 + (xend * 4), ypos + yinc);
 #endif
 
     // Each byte contains two pixels
     int i = 0;
+/*    pix_buffer[i++] = palette[0x07];
+    pix_buffer[i++] = palette[0x07];
+    pix_buffer[i++] = palette[0x07];
+    pix_buffer[i++] = palette[0x07];
+*/
     for(int x = xstart; x < xend; x++){
 #ifdef ESPBOY
         pix_buffer[i++] = palette[GET_PIX_LEFT(redrawscreen[SCREEN_ADDR(x,y)])];
@@ -551,17 +592,23 @@ void redrawScreen() {
         pix_buffer[i++] = pix_buffer[i++] = palette[GET_PIX_RIGHT(redrawscreen[SCREEN_ADDR(x,y)])];
 #endif
     }
-    tft.pushColors(pix_buffer, i);
+/*    pix_buffer[i++] = palette[0x08];
+    pix_buffer[i++] = palette[0x08];
+    pix_buffer[i++] = palette[0x08];
+    pix_buffer[i++] = palette[0x08];
+*/
+    pushPixels(i);
 
 #ifndef ESPBOY
     // double line? then push again
     if (yinc == 2)
-      tft.pushColors(pix_buffer, i);
+      pushPixels(i);
 
     ypos += yinc;
 #endif
   }
-  memset(line_redraw, 0, 128);
+  
+  // memset(line_redraw, 0, 128);
   setRedraw();
 }
 
@@ -602,14 +649,14 @@ inline uint8_t nearesthibit(uint16_t n){
   uint8_t m = (u|l) >> 1;
   return (n & m == m)?u:l;
 }
-
+/*
 inline uint8_t setlower8bits(uint16_t n){
   n |= (n >>  1);
   n |= (n >>  2);
   n |= (n >>  4);
   return (n & 0xff);
 }
-
+*/
 
 void drawParticles(int16_t x, int16_t y, uint16_t pcolor, int16_t radpx, int16_t count){
   x = coord(x);
@@ -909,6 +956,11 @@ void testActorMap(int16_t celx, int16_t cely, int16_t sx, int16_t sy, int16_t tw
 }
 
 inline void clearScr(uint8_t color){
+/* #if 0 // def _ODROID_GO_H_
+  color = ((drwpalette[color] << 4) | (drwpalette[color] & 0x0f));
+  memset(screen, color, SCREEN_WIDTH_BYTES*SCREEN_HEIGHT);
+  memset(line_draw, 255, LINE_REDRAW_SIZE);
+#else */
   uint8_t twocolor[SCREEN_WIDTH_BYTES];
   memset(twocolor, ((drwpalette[color] << 4) | (drwpalette[color] & 0x0f)), SCREEN_WIDTH_BYTES);
   for (int i = 0; i < SCREEN_HEIGHT; i++) {
@@ -917,6 +969,7 @@ inline void clearScr(uint8_t color){
       memcpy(screen+i*SCREEN_WIDTH_BYTES, twocolor, SCREEN_WIDTH_BYTES);
     }
   }
+// #endif
   espico.nlregx = 0;
   espico.regx = 0;
   espico.regy = 0;
@@ -1585,7 +1638,7 @@ inline void prints(int16_t adr){
       espico.regy += FONT_HEIGHT;
       x = espico.nlregx;
     } else{
-      putchar(c, x, espico.regy);
+      es_putchar(c, x, espico.regy);
       x += FONT_WIDTH+1;
     }
     adr++;
@@ -1599,7 +1652,7 @@ inline void printc(char c) {
     espico.regy += FONT_HEIGHT;
     espico.regx = espico.nlregx;
   } else {
-    putchar(c, espico.regx, espico.regy);
+    es_putchar(c, espico.regx, espico.regy);
     espico.regx += FONT_WIDTH+1;
   }
 }
@@ -1705,13 +1758,13 @@ void putStringUC(char s[], int8_t y){
   int8_t i = 0;
   int x = 0;
   while(s[i] != 0 && i < 32){
-    putchar(toupper(s[i]), x, y);
+    es_putchar(toupper(s[i]), x, y);
     x += FONT_WIDTH+1;
     i++;
   }
 }
 
-void putchar(char c, uint8_t x, uint8_t y) {
+void es_putchar(char c, uint8_t x, uint8_t y) {
   const uint8_t fgcolor = drwpalette[espico.color];
   if (c >= 32 && c < 156) {
     c -= 32;

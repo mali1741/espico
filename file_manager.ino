@@ -1,5 +1,29 @@
+
+#ifdef _ODROID_GO_H_
+inline void waitForRedraw() {
+  espico.drawing = 0;
+  while (getRedraw() == 0) {
+    delay(10);
+  }
+  // LOCK_DRAWING();
+  espico.drawing = 1;
+  // UNLOCK_DRAWING();
+}
+#define UPDATE_KEY() 
+#else
+inline void waitForRedraw() {
+  espico.drawing = 0;
+  redrawScreen();
+}
+#define UPDATE_KEY() getKey();
+#endif
+
 void fileList(char *path) {
+#ifdef _ODROID_GO_H_
+  File dir = SPIFFS.open(path);
+#else
   Dir dir = SPIFFS.openDir(path);
+#endif
   char s[32];
   char thisF[32];
   int16_t lst = 1;
@@ -7,20 +31,42 @@ void fileList(char *path) {
   int16_t startpos = 0;
   int16_t fileCount = 0;
   int16_t skip = 0;
+#ifdef _ODROID_GO_H_
+  if(!dir.isDirectory()){
+    dir.close();
+    Serial.println("NOT DIR");
+    return;
+  }
+  dir.rewindDirectory();
+
+  File entry;
+  while (entry = dir.openNextFile()) {
+#else
   while (dir.next()) {
     File entry = dir.openFile("r");
+#endif
     strcpy(s, entry.name());
     Serial.println(s);
     entry.close();
     fileCount++;
   }
+  // nowDrawing();
+  waitForRedraw();
+  clearScr(0);
+//  waitForRedraw();
   while(1){
+    waitForRedraw();
     skip = startpos;
     lst = 1;
-    dir = SPIFFS.openDir(path);
     setColor(7);
+#ifdef _ODROID_GO_H_
+    dir.rewindDirectory();
+    while ((entry = dir.openNextFile()) && lst < 14) {
+#else
+    dir = SPIFFS.openDir(path);
     while (dir.next() && lst < 14) {
       File entry = dir.openFile("r");
+#endif
       if(skip > 0){
         skip--;
       }
@@ -49,19 +95,22 @@ void fileList(char *path) {
     // setColor(6);
     // drwLine(2, (pos - startpos + 1) * 8, 124,  (pos - startpos + 1) * 8);
     // drwLine(2, (pos - startpos + 1) * 8 + 7, 124,  (pos - startpos + 1) * 8 + 7);
-    redrawScreen();
-    clearScr(0);
+    // redrawScreen();
+    waitForRedraw();
     //while(thiskey != 0){
-      getKey();
-      delay(100);
+    UPDATE_KEY();
+    delay(100);
+    //  getKey();
+    //  delay(100);
     //}
     while(thiskey == 0){   
-      getKey();
+      UPDATE_KEY();
       delay(100);
       if(Serial.available()){
         char c = Serial.read();
         Serial.print(c);
         if(c == 'm'){
+          clearScr(0);
           loadFromSerial();
           cpuInit();
           return;
@@ -69,6 +118,7 @@ void fileList(char *path) {
       }
     }
     if(thiskey & KEY_A){//ok
+      clearScr(0);
       cpuInit();
       int len = strlen(thisF);
       if (len > 4 && strcmp(&thisF[len-4], ".epo") == 0) {
@@ -85,16 +135,21 @@ void fileList(char *path) {
     else if(thiskey & KEY_DOWN){//down
       if(pos < fileCount - 1)
         pos++;
-      if(pos - startpos > 12)
+      if(pos - startpos > 12) {
         startpos++;
+        clearScr(0);
+      }
     }
     else if(thiskey & KEY_UP){//up
       if(pos > 0)
         pos--;
-      if(pos - startpos < 0)
+      if(pos - startpos < 0) {
         startpos--;
+        clearScr(0);
+      }
     }
     if(thiskey & KEY_LEFT){//left
+      clearScr(0);
       cpuInit();
       return;
     }

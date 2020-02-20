@@ -1,3 +1,5 @@
+#ifndef _ODROID_GO_H_
+
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
@@ -189,3 +191,5 @@ void serverSetup() {
 void serverLoop() {
   server.handleClient();
 }
+
+#endif

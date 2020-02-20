@@ -1,5 +1,34 @@
 #include "keys.h"
 
+#ifdef _ODROID_GO_H_
+
+void getKey() {
+  lastkey = thiskey;
+
+  GO.BtnA.read();
+  GO.BtnB.read();
+  GO.BtnMenu.read();
+  GO.BtnVolume.read();
+  GO.BtnSelect.read();
+  GO.BtnStart.read();
+  GO.JOY_Y.readAxis();
+  GO.JOY_X.readAxis();
+
+  thiskey = 0;
+  if (GO.JOY_Y.isAxisPressed() == 2) thiskey |= KEY_UP;
+  if (GO.JOY_Y.isAxisPressed() == 1) thiskey |= KEY_DOWN;
+  if (GO.JOY_X.isAxisPressed() == 2) thiskey |= KEY_LEFT;
+  if (GO.JOY_X.isAxisPressed() == 1) thiskey |= KEY_RIGHT;
+  // if (GO.BtnMenu.isPressed() == 1) thiskey |= KEY_MENU;
+  // if (GO.BtnVolume.isPressed() == 1) thiskey |= KEY_VOLUME;
+  if (GO.BtnSelect.isPressed() == 1) thiskey |= KEY_SELECT;
+  if (GO.BtnStart.isPressed() == 1)  thiskey |= KEY_START;
+  if (GO.BtnB.isPressed() == 1)      thiskey |= KEY_B;
+  if (GO.BtnA.isPressed() == 1)      thiskey |= KEY_A;
+}
+
+#else 
+
 #ifdef USE_NUNCHUCK
 #include <NintendoExtensionCtrl.h>
 
@@ -69,23 +98,17 @@ void scani2c(){
 }
 
 void getKey(){
+  uint8_t keyread;
   thiskey = 0;
-  if(!mcp.digitalRead(0))
-     thiskey |= KEY_A;
-  if(!mcp.digitalRead(1))
-     thiskey |= KEY_SELECT;
-  if(!mcp.digitalRead(2))
-     thiskey |= KEY_START;
-  if(!mcp.digitalRead(3))
-     thiskey |= KEY_B;
-  if(!mcp.digitalRead(4))
-     thiskey |= KEY_UP;
-  if(!mcp.digitalRead(5))
-     thiskey |= KEY_DOWN;
-  if(!mcp.digitalRead(6))
-     thiskey |= KEY_LEFT;
-  if(!mcp.digitalRead(7))
-     thiskey |= KEY_RIGHT;
+  keyread = mcp.readGPIOAB()&255;
+  if(!(keyread&1)) thiskey |= KEY_LEFT;
+  if(!(keyread&2)) thiskey |= KEY_UP;
+  if(!(keyread&4)) thiskey |= KEY_DOWN;
+  if(!(keyread&8)) thiskey |= KEY_RIGHT;
+  if(!(keyread&16)) thiskey |= KEY_A;
+  if(!(keyread&32)) thiskey |= KEY_B;
+  if(!(keyread&64)) thiskey |= KEY_START;
+  if(!(keyread&128)) thiskey |= KEY_SELECT;
 }
 #else
 void getKey(){
@@ -114,6 +137,8 @@ void getKey(){
   if((dio_in & 1) == 0)
     thiskey |= KEY_LEFT;
 }
+#endif
+
 #endif
 
 #endif
